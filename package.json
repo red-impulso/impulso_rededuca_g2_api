@@ -1,0 +1,7 @@
+{
+  "name": "proyecto-red-impulso-workspace",
+  "private": true,
+  "scripts": {
+    "test:e2e": "npm --prefix impulso_rededuca_g2_api run test:e2e"
+  }
+}
