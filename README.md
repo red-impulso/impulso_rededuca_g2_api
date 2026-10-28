@@ -4,7 +4,7 @@ API (NestJS) de RedEduca, el "cerebro" del proyecto. Por ahora expone un endpoin
 
 ## Requisitos
 
-- Node.js 22 o superior
+- Node.js 22.22.3 o superior dentro de la serie 22, 24.15.0 o superior dentro de la serie 24, o 26 o superior
 - npm
 
 ## Instalar
