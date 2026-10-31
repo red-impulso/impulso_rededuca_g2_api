@@ -14,12 +14,18 @@ describe('MeController', () => {
 
   const getUser = vi.fn();
   const maybeSingle = vi.fn();
+  const eqMemberships = vi.fn();
+  const from = vi.fn((table: string) => ({
+    select: vi.fn(() => ({
+      eq: vi.fn(() =>
+        table === 'profiles' ? { maybeSingle } : eqMemberships(),
+      ),
+    })),
+  }));
   const supabase = {
     admin: {
       auth: { getUser },
-      from: vi.fn(() => ({
-        select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle })) })),
-      })),
+      from,
     },
   };
 
@@ -76,13 +82,18 @@ describe('MeController', () => {
       error: null,
     });
     maybeSingle.mockResolvedValue({
-      data: {
-        id: 'user-1',
-        full_name: 'Ana García',
-        role: 'teacher',
-        school_id: 'school-1',
-        schools: { id: 'school-1', name: 'Escuela N°1' },
-      },
+      data: { id: 'user-1', full_name: 'Ana García' },
+      error: null,
+    });
+    eqMemberships.mockResolvedValue({
+      data: [
+        {
+          id: 'm-1',
+          school_id: 'school-1',
+          role: 'teacher',
+          schools: { id: 'school-1', name: 'Escuela N°1' },
+        },
+      ],
       error: null,
     });
 
@@ -100,7 +111,7 @@ describe('MeController', () => {
       },
       memberships: [
         {
-          id: 'user-1',
+          id: 'm-1',
           institutionId: 'school-1',
           institutionName: 'Escuela N°1',
           role: 'teacher',
@@ -109,21 +120,64 @@ describe('MeController', () => {
     });
   });
 
+  it('returns one entry per membership when the user has several schools', async () => {
+    getUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'ana@example.com' } },
+      error: null,
+    });
+    maybeSingle.mockResolvedValue({
+      data: { id: 'user-1', full_name: 'Ana García' },
+      error: null,
+    });
+    eqMemberships.mockResolvedValue({
+      data: [
+        {
+          id: 'm-1',
+          school_id: 'school-1',
+          role: 'teacher',
+          schools: { id: 'school-1', name: 'Escuela N°1' },
+        },
+        {
+          id: 'm-2',
+          school_id: 'school-2',
+          role: 'admin',
+          schools: { id: 'school-2', name: 'Escuela N°2' },
+        },
+      ],
+      error: null,
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/me')
+      .set('Authorization', 'Bearer valid-token')
+      .expect(200);
+
+    expect(response.body.memberships).toEqual([
+      {
+        id: 'm-1',
+        institutionId: 'school-1',
+        institutionName: 'Escuela N°1',
+        role: 'teacher',
+      },
+      {
+        id: 'm-2',
+        institutionId: 'school-2',
+        institutionName: 'Escuela N°2',
+        role: 'admin',
+      },
+    ]);
+  });
+
   it('returns empty memberships when the user has no school', async () => {
     getUser.mockResolvedValue({
       data: { user: { id: 'user-2', email: 'bob@example.com' } },
       error: null,
     });
     maybeSingle.mockResolvedValue({
-      data: {
-        id: 'user-2',
-        full_name: 'Bob',
-        role: 'student',
-        school_id: null,
-        schools: null,
-      },
+      data: { id: 'user-2', full_name: 'Bob' },
       error: null,
     });
+    eqMemberships.mockResolvedValue({ data: [], error: null });
 
     const response = await request(app.getHttpServer())
       .get('/me')

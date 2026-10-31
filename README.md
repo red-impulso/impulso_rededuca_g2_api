@@ -37,7 +37,9 @@ El `.env` está en `.gitignore`: nunca subir claves reales al repositorio. La `s
 
 Todos los endpoints requieren `Authorization: Bearer <access_token>` de Supabase Auth, salvo los marcados como públicos (`GET /` y `GET /health`). El `AuthGuard` valida el token contra Supabase y deja `request.user = { id, email, phone }`.
 
-- `GET /me` → `{ profile: { id, fullName, phone }, memberships: [{ id, institutionId, institutionName, role }] }`. Las membresías se derivan de `profiles.school_id` + `schools` (`institutionId`/`institutionName` mapean a `school_id`/`schools.name`).
+- `GET /me` → `{ profile: { id, fullName, phone }, memberships: [{ id, institutionId, institutionName, role }] }`. Las membresías salen de la tabla `memberships` joineada con `schools` (`institutionId`/`institutionName` mapean a `school_id`/`schools.name`); un usuario puede tener varias.
+
+Los endpoints de una institución se protegen con `MembershipGuard` (`@UseGuards(MembershipGuard)`, después del `AuthGuard` global): exigen el header `X-Institution-Id`, verifican que el usuario tenga membresía ahí (tabla `memberships`) y dejan `request.membership = { id, userId, institutionId, role }`, inyectable con `@CurrentMembership()`. Con `@Roles('admin', ...)` se restringe por rol. Sin header → 400; sin membresía o rol no permitido → 403. Si el usuario tiene varias membresías en la misma institución se usa la de mayor rango: `admin > director > teacher > guardian`.
 
 ## Correr
 
@@ -52,7 +54,7 @@ Para verificar: `GET /health` → `200 { "status": "ok" }`.
 
 ## Base de datos (Supabase)
 
-El esquema vive como migraciones SQL en `supabase/migrations/`. Incluye las tablas `schools`, `profiles`, `courses`, `subjects` y `enrollments`, con políticas RLS que limitan cada usuario a los datos de su escuela.
+El esquema vive como migraciones SQL en `supabase/migrations/`. Incluye las tablas `schools`, `profiles`, `memberships`, `courses`, `subjects` y `enrollments`, con políticas RLS que limitan cada usuario a los datos de sus escuelas (un usuario puede pertenecer a varias vía `memberships`).
 
 - **Crear una migración nueva:** `supabase migration new <nombre>` (o agregar un archivo `YYYYMMDDHHMMSS_descripcion.sql` en `supabase/migrations/`).
 - **Desarrollo local:** `supabase start` levanta Postgres + Auth + Studio en Docker; `supabase db reset` recrea la base aplicando todas las migraciones.
