@@ -14,35 +14,52 @@ export interface MeResponse {
   memberships: Membership[];
 }
 
+interface MembershipRow {
+  id: string;
+  school_id: string;
+  role: string;
+  schools: { id: string; name: string } | { id: string; name: string }[] | null;
+}
+
 @Injectable()
 export class MeService {
   constructor(private readonly supabase: SupabaseService) {}
 
   async getMe(user: AuthUser): Promise<MeResponse> {
-    const { data: profile, error } = await this.supabase.admin
-      .from('profiles')
-      .select('id, full_name, role, school_id, schools(id, name)')
-      .eq('id', user.id)
-      .maybeSingle();
+    const [profileResult, membershipsResult] = await Promise.all([
+      this.supabase.admin
+        .from('profiles')
+        .select('id, full_name')
+        .eq('id', user.id)
+        .maybeSingle(),
+      this.supabase.admin
+        .from('memberships')
+        .select('id, school_id, role, schools(id, name)')
+        .eq('user_id', user.id),
+    ]);
 
-    if (error) {
+    if (profileResult.error || membershipsResult.error) {
       throw new InternalServerErrorException();
     }
 
-    const embedded = profile?.schools;
-    const school = Array.isArray(embedded) ? embedded[0] : embedded;
-
-    const memberships: Membership[] =
-      profile && school
-        ? [
-            {
-              id: profile.id,
-              institutionId: school.id,
-              institutionName: school.name,
-              role: profile.role,
-            },
-          ]
-        : [];
+    const profile = profileResult.data;
+    const memberships = (membershipsResult.data ?? []).flatMap(
+      (row: MembershipRow) => {
+        const school = Array.isArray(row.schools)
+          ? row.schools[0]
+          : row.schools;
+        return school
+          ? [
+              {
+                id: row.id,
+                institutionId: row.school_id,
+                institutionName: school.name,
+                role: row.role,
+              },
+            ]
+          : [];
+      },
+    );
 
     return {
       profile: {
