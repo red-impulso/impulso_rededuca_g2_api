@@ -30,6 +30,7 @@ cp .env.example .env
 | `SUPABASE_URL`              | URL del proyecto Supabase.                                            |
 | `SUPABASE_ANON_KEY`         | Clave anónima (pública) de Supabase para el cliente.                  |
 | `SUPABASE_SERVICE_ROLE_KEY` | Clave `service_role` (privada) de Supabase; bypassa RLS. Solo server-side. |
+| `SEED_PASSWORD`             | Contraseña de los usuarios demo; solo la usa `npm run seed`.            |
 
 El `.env` está en `.gitignore`: nunca subir claves reales al repositorio. La `service_role` abre toda la base: solo va en el `.env` local y en las variables de entorno del deploy (Render), nunca en el repo ni por chat.
 
@@ -63,6 +64,12 @@ El esquema vive como migraciones SQL en `supabase/migrations/`. Incluye las tabl
 - **Crear una migración nueva:** `supabase migration new <nombre>` (o agregar un archivo `YYYYMMDDHHMMSS_descripcion.sql` en `supabase/migrations/`).
 - **Desarrollo local:** `supabase start` levanta Postgres + Auth + Studio en Docker; `supabase db reset` recrea la base aplicando todas las migraciones.
 - **Producción:** al hacer push a `main`, el workflow `.github/workflows/migrate.yml` ejecuta `supabase db push` automáticamente contra la base configurada en el secreto `SUPABASE_DB_URL` del repo. No aplicar migraciones a mano en producción: agregar el archivo SQL y hacer merge a `main`.
+
+## Seed de demo
+
+`npm run seed` (`scripts/seed.ts`) carga una escuela de mentira — "Escuela Demo Perico" — para probar y mostrar el sistema sin datos reales: un admin (`admin@demo.rededuca`), dos docentes (`docente1@`, `docente2@`), seis tutores (`tutor1@` a `tutor6@`), 20 alumnos repartidos en dos cursos (1.º A y 2.º A, mañana, 2026), 4 materias y el período "1.er trimestre". `tutor1` tiene 3 hijos vinculados.
+
+Requiere `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y `SEED_PASSWORD` (contraseña compartida de todos los usuarios demo — elegila vos, no va en el repo) en `.env` o en el entorno. Es idempotente: borra la institución demo y la recrea; los usuarios se reutilizan si ya existen.
 
 ## Probar
 
