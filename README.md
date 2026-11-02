@@ -41,6 +41,10 @@ Todos los endpoints requieren `Authorization: Bearer <access_token>` de Supabase
 
 Los endpoints de una institución se protegen con `MembershipGuard` (`@UseGuards(MembershipGuard)`, después del `AuthGuard` global): exigen el header `X-Institution-Id`, verifican que el usuario tenga membresía ahí (tabla `memberships`) y dejan `request.membership = { id, userId, institutionId, role }`, inyectable con `@CurrentMembership()`. Con `@Roles('admin', ...)` se restringe por rol. Sin header → 400; sin membresía o rol no permitido → 403. Si el usuario tiene varias membresías en la misma institución se usa la de mayor rango: `admin > director > teacher > guardian`.
 
+- `GET /me/subjects` (rol `teacher`) → `[{ id, name, course: { id, year, division, shift } }]`: las materias que dicta en la institución.
+- `GET /me/courses` (rol `teacher`) → `[{ id, year, division, shift }]`: los cursos donde tiene al menos una materia.
+- `GET /me/students` (rol `guardian`) → `[{ id, firstName, lastName, course: { id, year, division } }]`: los estudiantes vinculados por `guardian_links`, con su curso en la institución.
+
 ## Correr
 
 ```bash

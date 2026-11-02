@@ -9,19 +9,49 @@ import { SupabaseModule } from '../supabase/supabase.module.js';
 import { SupabaseService } from '../supabase/supabase.service.js';
 import { MeModule } from './me.module.js';
 
+interface QueryResult {
+  data: unknown;
+  error: unknown;
+}
+
 describe('MeController', () => {
   let app: INestApplication<App>;
 
   const getUser = vi.fn();
-  const maybeSingle = vi.fn();
-  const eqMemberships = vi.fn();
-  const from = vi.fn((table: string) => ({
-    select: vi.fn(() => ({
-      eq: vi.fn(() =>
-        table === 'profiles' ? { maybeSingle } : eqMemberships(),
-      ),
-    })),
-  }));
+  let results: Record<string, QueryResult>;
+  let chains: Record<string, ReturnType<typeof makeChain>>;
+
+  // A thenable stand-in for the supabase query builder: every method returns
+  // the chain itself and awaiting it resolves to results[table].
+  function makeChain(table: string) {
+    const chain = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      in: vi.fn(),
+      order: vi.fn(),
+      maybeSingle: vi.fn(),
+      // oxlint-disable-next-line no-thenable -- supabase builders are thenable
+      then: (onFulfilled: (value: QueryResult) => unknown) =>
+        Promise.resolve(results[table]).then(onFulfilled),
+    };
+    for (const method of [
+      'select',
+      'eq',
+      'in',
+      'order',
+      'maybeSingle',
+    ] as const) {
+      chain[method].mockReturnValue(chain);
+    }
+    return chain;
+  }
+
+  const from = vi.fn((table: string) => {
+    const chain = makeChain(table);
+    chains[table] = chain;
+    return chain;
+  });
+
   const supabase = {
     admin: {
       auth: { getUser },
@@ -29,8 +59,28 @@ describe('MeController', () => {
     },
   };
 
+  const authAs = (id: string, extra: Record<string, unknown> = {}) =>
+    getUser.mockResolvedValue({
+      data: { user: { id, ...extra } },
+      error: null,
+    });
+
+  const memberAs = (role: string) => {
+    results.memberships = {
+      data: [{ id: 'm-1', school_id: 'school-1', role }],
+      error: null,
+    };
+  };
+
+  const authed = (test: request.Test) =>
+    test
+      .set('Authorization', 'Bearer valid-token')
+      .set('X-Institution-Id', 'school-1');
+
   beforeEach(async () => {
     vi.clearAllMocks();
+    results = {};
+    chains = {};
     const module: TestingModule = await Test.createTestingModule({
       imports: [SupabaseModule, MeModule],
       providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
@@ -71,21 +121,12 @@ describe('MeController', () => {
   });
 
   it('returns the profile and memberships for a valid token', async () => {
-    getUser.mockResolvedValue({
-      data: {
-        user: {
-          id: 'user-1',
-          email: 'ana@example.com',
-          phone: '+5491100000000',
-        },
-      },
-      error: null,
-    });
-    maybeSingle.mockResolvedValue({
+    authAs('user-1', { email: 'ana@example.com', phone: '+5491100000000' });
+    results.profiles = {
       data: { id: 'user-1', full_name: 'Ana García' },
       error: null,
-    });
-    eqMemberships.mockResolvedValue({
+    };
+    results.memberships = {
       data: [
         {
           id: 'm-1',
@@ -95,7 +136,7 @@ describe('MeController', () => {
         },
       ],
       error: null,
-    });
+    };
 
     const response = await request(app.getHttpServer())
       .get('/me')
@@ -121,15 +162,12 @@ describe('MeController', () => {
   });
 
   it('returns one entry per membership when the user has several schools', async () => {
-    getUser.mockResolvedValue({
-      data: { user: { id: 'user-1', email: 'ana@example.com' } },
-      error: null,
-    });
-    maybeSingle.mockResolvedValue({
+    authAs('user-1', { email: 'ana@example.com' });
+    results.profiles = {
       data: { id: 'user-1', full_name: 'Ana García' },
       error: null,
-    });
-    eqMemberships.mockResolvedValue({
+    };
+    results.memberships = {
       data: [
         {
           id: 'm-1',
@@ -145,7 +183,7 @@ describe('MeController', () => {
         },
       ],
       error: null,
-    });
+    };
 
     const response = await request(app.getHttpServer())
       .get('/me')
@@ -169,15 +207,12 @@ describe('MeController', () => {
   });
 
   it('returns empty memberships when the user has no school', async () => {
-    getUser.mockResolvedValue({
-      data: { user: { id: 'user-2', email: 'bob@example.com' } },
-      error: null,
-    });
-    maybeSingle.mockResolvedValue({
+    authAs('user-2', { email: 'bob@example.com' });
+    results.profiles = {
       data: { id: 'user-2', full_name: 'Bob' },
       error: null,
-    });
-    eqMemberships.mockResolvedValue({ data: [], error: null });
+    };
+    results.memberships = { data: [], error: null };
 
     const response = await request(app.getHttpServer())
       .get('/me')
@@ -187,6 +222,188 @@ describe('MeController', () => {
     expect(response.body).toEqual({
       profile: { id: 'user-2', fullName: 'Bob', phone: null },
       memberships: [],
+    });
+  });
+
+  describe('GET /me/subjects', () => {
+    it('returns only the subjects the teacher gives, with their course', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      results.subjects = {
+        data: [
+          {
+            id: 'sub-1',
+            name: 'Matemática',
+            courses: { id: 'c-1', year: 3, division: 'A', shift: 'morning' },
+          },
+          {
+            id: 'sub-2',
+            name: 'Física',
+            courses: { id: 'c-2', year: 5, division: 'B', shift: 'afternoon' },
+          },
+        ],
+        error: null,
+      };
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/me/subjects'),
+      ).expect(200);
+
+      expect(chains.subjects.eq).toHaveBeenCalledWith(
+        'teacher_id',
+        'teacher-1',
+      );
+      expect(chains.subjects.eq).toHaveBeenCalledWith(
+        'courses.school_id',
+        'school-1',
+      );
+      expect(response.body).toEqual([
+        {
+          id: 'sub-1',
+          name: 'Matemática',
+          course: { id: 'c-1', year: 3, division: 'A', shift: 'morning' },
+        },
+        {
+          id: 'sub-2',
+          name: 'Física',
+          course: { id: 'c-2', year: 5, division: 'B', shift: 'afternoon' },
+        },
+      ]);
+    });
+
+    it('returns 403 for a non-teacher membership', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+
+      await authed(request(app.getHttpServer()).get('/me/subjects')).expect(
+        403,
+      );
+      expect(from).not.toHaveBeenCalledWith('subjects');
+    });
+
+    it('returns 400 without an X-Institution-Id header', async () => {
+      authAs('teacher-1');
+
+      await request(app.getHttpServer())
+        .get('/me/subjects')
+        .set('Authorization', 'Bearer valid-token')
+        .expect(400);
+    });
+  });
+
+  describe('GET /me/courses', () => {
+    it('returns the courses where the teacher has at least one subject', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      // A course repeats once per matching subject through the !inner join.
+      results.courses = {
+        data: [
+          { id: 'c-1', year: 3, division: 'A', shift: 'morning' },
+          { id: 'c-1', year: 3, division: 'A', shift: 'morning' },
+          { id: 'c-2', year: 5, division: 'B', shift: 'afternoon' },
+        ],
+        error: null,
+      };
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/me/courses'),
+      ).expect(200);
+
+      expect(chains.courses.eq).toHaveBeenCalledWith('school_id', 'school-1');
+      expect(chains.courses.eq).toHaveBeenCalledWith(
+        'subjects.teacher_id',
+        'teacher-1',
+      );
+      expect(response.body).toEqual([
+        { id: 'c-1', year: 3, division: 'A', shift: 'morning' },
+        { id: 'c-2', year: 5, division: 'B', shift: 'afternoon' },
+      ]);
+    });
+
+    it('returns 403 for a non-teacher membership', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+
+      await authed(request(app.getHttpServer()).get('/me/courses')).expect(403);
+      expect(from).not.toHaveBeenCalledWith('courses');
+    });
+  });
+
+  describe('GET /me/students', () => {
+    it('returns only the students linked to the guardian, with their course', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+      results.guardian_links = {
+        data: [{ student_id: 'stu-1' }, { student_id: 'stu-2' }],
+        error: null,
+      };
+      results.enrollments = {
+        data: [
+          {
+            profiles: { id: 'stu-1', first_name: 'Luna', last_name: 'Pérez' },
+            courses: { id: 'c-1', year: 3, division: 'A' },
+          },
+          {
+            profiles: { id: 'stu-2', first_name: 'Teo', last_name: 'Gómez' },
+            courses: { id: 'c-2', year: 1, division: 'B' },
+          },
+        ],
+        error: null,
+      };
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/me/students'),
+      ).expect(200);
+
+      expect(chains.guardian_links.eq).toHaveBeenCalledWith(
+        'guardian_id',
+        'guardian-1',
+      );
+      expect(chains.enrollments.in).toHaveBeenCalledWith('student_id', [
+        'stu-1',
+        'stu-2',
+      ]);
+      expect(chains.enrollments.eq).toHaveBeenCalledWith(
+        'courses.school_id',
+        'school-1',
+      );
+      expect(response.body).toEqual([
+        {
+          id: 'stu-1',
+          firstName: 'Luna',
+          lastName: 'Pérez',
+          course: { id: 'c-1', year: 3, division: 'A' },
+        },
+        {
+          id: 'stu-2',
+          firstName: 'Teo',
+          lastName: 'Gómez',
+          course: { id: 'c-2', year: 1, division: 'B' },
+        },
+      ]);
+    });
+
+    it('returns an empty list when the guardian has no linked students', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+      results.guardian_links = { data: [], error: null };
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/me/students'),
+      ).expect(200);
+
+      expect(response.body).toEqual([]);
+      expect(from).not.toHaveBeenCalledWith('enrollments');
+    });
+
+    it('returns 403 for a non-guardian membership', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+
+      await authed(request(app.getHttpServer()).get('/me/students')).expect(
+        403,
+      );
+      expect(from).not.toHaveBeenCalledWith('guardian_links');
     });
   });
 });
