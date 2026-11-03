@@ -30,6 +30,7 @@ cp .env.example .env
 | `SUPABASE_URL`              | URL del proyecto Supabase.                                            |
 | `SUPABASE_ANON_KEY`         | Clave anónima (pública) de Supabase para el cliente.                  |
 | `SUPABASE_SERVICE_ROLE_KEY` | Clave `service_role` (privada) de Supabase; bypassa RLS. Solo server-side. |
+| `SEED_PASSWORD`             | Contraseña de los usuarios demo; solo la usa `npm run seed`.            |
 
 El `.env` está en `.gitignore`: nunca subir claves reales al repositorio. La `service_role` abre toda la base: solo va en el `.env` local y en las variables de entorno del deploy (Render), nunca en el repo ni por chat.
 
@@ -40,6 +41,10 @@ Todos los endpoints requieren `Authorization: Bearer <access_token>` de Supabase
 - `GET /me` → `{ profile: { id, fullName, phone }, memberships: [{ id, institutionId, institutionName, role }] }`. Las membresías salen de la tabla `memberships` joineada con `schools` (`institutionId`/`institutionName` mapean a `school_id`/`schools.name`); un usuario puede tener varias.
 
 Los endpoints de una institución se protegen con `MembershipGuard` (`@UseGuards(MembershipGuard)`, después del `AuthGuard` global): exigen el header `X-Institution-Id`, verifican que el usuario tenga membresía ahí (tabla `memberships`) y dejan `request.membership = { id, userId, institutionId, role }`, inyectable con `@CurrentMembership()`. Con `@Roles('admin', ...)` se restringe por rol. Sin header → 400; sin membresía o rol no permitido → 403. Si el usuario tiene varias membresías en la misma institución se usa la de mayor rango: `admin > director > teacher > guardian`.
+
+- `GET /me/subjects` (rol `teacher`) → `[{ id, name, course: { id, year, division, shift } }]`: las materias que dicta en la institución.
+- `GET /me/courses` (rol `teacher`) → `[{ id, year, division, shift }]`: los cursos donde tiene al menos una materia.
+- `GET /me/students` (rol `guardian`) → `[{ id, firstName, lastName, course: { id, year, division } }]`: los estudiantes vinculados por `guardian_links`, con su curso en la institución.
 
 ## Correr
 
@@ -59,6 +64,12 @@ El esquema vive como migraciones SQL en `supabase/migrations/`. Incluye las tabl
 - **Crear una migración nueva:** `supabase migration new <nombre>` (o agregar un archivo `YYYYMMDDHHMMSS_descripcion.sql` en `supabase/migrations/`).
 - **Desarrollo local:** `supabase start` levanta Postgres + Auth + Studio en Docker; `supabase db reset` recrea la base aplicando todas las migraciones.
 - **Producción:** al hacer push a `main`, el workflow `.github/workflows/migrate.yml` ejecuta `supabase db push` automáticamente contra la base configurada en el secreto `SUPABASE_DB_URL` del repo. No aplicar migraciones a mano en producción: agregar el archivo SQL y hacer merge a `main`.
+
+## Seed de demo
+
+`npm run seed` (`scripts/seed.ts`) carga una escuela de mentira — "Escuela Demo Perico" — para probar y mostrar el sistema sin datos reales: un admin (`admin@demo.rededuca`), dos docentes (`docente1@`, `docente2@`), seis tutores (`tutor1@` a `tutor6@`), 20 alumnos repartidos en dos cursos (1.º A y 2.º A, mañana, 2026), 4 materias y el período "1.er trimestre". `tutor1` tiene 3 hijos vinculados.
+
+Requiere `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y `SEED_PASSWORD` (contraseña compartida de todos los usuarios demo — elegila vos, no va en el repo) en `.env` o en el entorno. Es idempotente: borra la institución demo y la recrea; los usuarios se reutilizan si ya existen.
 
 ## Probar
 
