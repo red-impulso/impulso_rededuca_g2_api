@@ -31,6 +31,7 @@ cp .env.example .env
 | `SUPABASE_ANON_KEY`         | Clave anónima (pública) de Supabase para el cliente.                  |
 | `SUPABASE_SERVICE_ROLE_KEY` | Clave `service_role` (privada) de Supabase; bypassa RLS. Solo server-side. |
 | `SEED_PASSWORD`             | Contraseña de los usuarios demo; solo la usa `npm run seed`.            |
+| `CORS_ORIGINS`              | Dominios extra que pueden llamar a la API desde el navegador, separados por coma (la URL de Vercel del grupo, con `https://` y sin `/` al final). `http://localhost:3000` siempre está permitido. |
 
 El `.env` está en `.gitignore`: nunca subir claves reales al repositorio. La `service_role` abre toda la base: solo va en el `.env` local y en las variables de entorno del deploy (Render), nunca en el repo ni por chat.
 
