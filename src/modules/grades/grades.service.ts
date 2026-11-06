@@ -297,7 +297,7 @@ export class GradesService {
       throw new InternalServerErrorException();
     }
     if (!enrollments?.length) {
-      throw new NotFoundException('Student not found');
+      throw new NotFoundException('No se encontró el alumno');
     }
 
     const allowed = await this.canViewStudentGrades(
@@ -307,7 +307,7 @@ export class GradesService {
       enrollments.map((row: { course_id: string }) => row.course_id),
     );
     if (!allowed) {
-      throw new ForbiddenException();
+      throw new ForbiddenException('No podés ver las notas de este alumno');
     }
 
     const { data, error } = await this.supabase.admin
