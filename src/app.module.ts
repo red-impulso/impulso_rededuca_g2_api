@@ -6,6 +6,7 @@ import { AppService } from './app.service.js';
 import { AuthGuard } from './auth/auth.guard.js';
 import { HealthModule } from './health/health.module.js';
 import { MeModule } from './me/me.module.js';
+import { AnnouncementsModule } from './modules/announcements/announcements.module.js';
 import { AttendanceModule } from './modules/attendance/attendance.module.js';
 import { GradesModule } from './modules/grades/grades.module.js';
 import { SupabaseModule } from './supabase/supabase.module.js';
@@ -18,6 +19,7 @@ import { SupabaseModule } from './supabase/supabase.module.js';
     MeModule,
     GradesModule,
     AttendanceModule,
+    AnnouncementsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],
