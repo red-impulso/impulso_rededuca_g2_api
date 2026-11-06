@@ -611,4 +611,152 @@ describe('GradesService', () => {
       ).expect(400);
     });
   });
+
+  describe('GET /students/:studentId/grades', () => {
+    const studentInSchool = () => {
+      queues.enrollments = [
+        {
+          data: [
+            {
+              course_id: 'course-1',
+              courses: { school_id: 'school-1' },
+            },
+          ],
+          error: null,
+        },
+      ];
+    };
+
+    const studentGrades = () => {
+      queues.grades = [
+        {
+          data: [
+            {
+              value: 8.5,
+              subjects: { id: 'subject-1', name: 'Matemática' },
+              periods: { id: 'period-1', name: '1.er trimestre' },
+            },
+            {
+              value: 7,
+              subjects: { id: 'subject-2', name: 'Lengua' },
+              periods: { id: 'period-1', name: '1.er trimestre' },
+            },
+          ],
+          error: null,
+        },
+      ];
+    };
+
+    const expectedGrades = [
+      {
+        subject: { id: 'subject-2', name: 'Lengua' },
+        period: { id: 'period-1', name: '1.er trimestre' },
+        value: 7,
+      },
+      {
+        subject: { id: 'subject-1', name: 'Matemática' },
+        period: { id: 'period-1', name: '1.er trimestre' },
+        value: 8.5,
+      },
+    ];
+
+    it('returns every grade of the student to a linked guardian', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+      studentInSchool();
+      queues.guardian_links = [{ data: { student_id: 'stu-1' }, error: null }];
+      studentGrades();
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/students/stu-1/grades'),
+      ).expect(200);
+
+      expect(response.body).toEqual(expectedGrades);
+    });
+
+    it('returns 403 to a guardian not linked to the student', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+      studentInSchool();
+      queues.guardian_links = [{ data: null, error: null }];
+
+      await authed(
+        request(app.getHttpServer()).get('/students/stu-1/grades'),
+      ).expect(403);
+    });
+
+    it('returns 404 for a student of another institution', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [{ data: [], error: null }];
+
+      await authed(
+        request(app.getHttpServer()).get('/students/stu-other/grades'),
+      ).expect(404);
+    });
+
+    it('returns the grades to a teacher with a subject in the student course', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      studentInSchool();
+      queues.subjects = [{ data: [{ id: 'subject-1' }], error: null }];
+      studentGrades();
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/students/stu-1/grades'),
+      ).expect(200);
+
+      expect(response.body).toEqual(expectedGrades);
+    });
+
+    it('returns 403 to a teacher without a subject in the student course', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      studentInSchool();
+      queues.subjects = [{ data: [], error: null }];
+
+      await authed(
+        request(app.getHttpServer()).get('/students/stu-1/grades'),
+      ).expect(403);
+    });
+
+    it.each(['admin', 'director'])(
+      'returns the grades to a %s membership',
+      async (role) => {
+        authAs(`${role}-1`);
+        memberAs(role);
+        studentInSchool();
+        studentGrades();
+
+        const response = await authed(
+          request(app.getHttpServer()).get('/students/stu-1/grades'),
+        ).expect(200);
+
+        expect(response.body).toEqual(expectedGrades);
+      },
+    );
+
+    it('returns 403 to a student membership', async () => {
+      authAs('student-1');
+      memberAs('student');
+      studentInSchool();
+
+      await authed(
+        request(app.getHttpServer()).get('/students/stu-1/grades'),
+      ).expect(403);
+    });
+
+    it('returns an empty list when the student has no grades yet', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      studentInSchool();
+      queues.grades = [{ data: [], error: null }];
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/students/stu-1/grades'),
+      ).expect(200);
+
+      expect(response.body).toEqual([]);
+    });
+  });
 });

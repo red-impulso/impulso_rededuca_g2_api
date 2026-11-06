@@ -33,6 +33,12 @@ export interface GradeSheetRow {
   value: number | null;
 }
 
+export interface StudentGradeRow {
+  subject: { id: string; name: string };
+  period: { id: string; name: string };
+  value: number;
+}
+
 interface SubjectRow {
   id: string;
   teacher_id: string | null;
@@ -55,6 +61,13 @@ interface GradeRow {
   id: string;
   student_id: string;
   value: number;
+}
+
+interface StudentGradeQueryRow {
+  value: number;
+  subjects:
+    { id: string; name: string } | { id: string; name: string }[] | null;
+  periods: { id: string; name: string } | { id: string; name: string }[] | null;
 }
 
 function firstRow<T>(value: T | T[] | null | undefined): T | undefined {
@@ -262,6 +275,107 @@ export class GradesService {
     }
 
     return { saved: changed.length };
+  }
+
+  // Every grade of a student, scoped to the member's school. Allowed for the
+  // student's linked guardians, teachers with a subject in the student's
+  // course, and admin/director memberships; anyone else gets 403 and a
+  // student from another institution gets 404.
+  async getStudentGrades(
+    user: AuthUser,
+    membership: ActiveMembership,
+    studentId: string,
+  ): Promise<StudentGradeRow[]> {
+    const { data: enrollments, error: enrollmentsError } =
+      await this.supabase.admin
+        .from('enrollments')
+        .select('course_id, courses!inner(school_id)')
+        .eq('student_id', studentId)
+        .eq('courses.school_id', membership.institutionId);
+
+    if (enrollmentsError) {
+      throw new InternalServerErrorException();
+    }
+    if (!enrollments?.length) {
+      throw new NotFoundException('Student not found');
+    }
+
+    const allowed = await this.canViewStudentGrades(
+      user,
+      membership,
+      studentId,
+      enrollments.map((row: { course_id: string }) => row.course_id),
+    );
+    if (!allowed) {
+      throw new ForbiddenException();
+    }
+
+    const { data, error } = await this.supabase.admin
+      .from('grades')
+      .select(
+        'value, subjects!inner(id, name, courses!inner(school_id)), periods!inner(id, name)',
+      )
+      .eq('student_id', studentId)
+      .eq('subjects.courses.school_id', membership.institutionId);
+
+    if (error) {
+      throw new InternalServerErrorException();
+    }
+
+    return ((data ?? []) as StudentGradeQueryRow[])
+      .flatMap((row) => {
+        const subject = firstRow(row.subjects);
+        const period = firstRow(row.periods);
+        return subject && period
+          ? [
+              {
+                subject: { id: subject.id, name: subject.name },
+                period: { id: period.id, name: period.name },
+                value: row.value,
+              },
+            ]
+          : [];
+      })
+      .sort(
+        (a, b) =>
+          a.subject.name.localeCompare(b.subject.name) ||
+          a.period.name.localeCompare(b.period.name),
+      );
+  }
+
+  private async canViewStudentGrades(
+    user: AuthUser,
+    membership: ActiveMembership,
+    studentId: string,
+    courseIds: string[],
+  ): Promise<boolean> {
+    if (membership.role === 'admin' || membership.role === 'director') {
+      return true;
+    }
+    if (membership.role === 'guardian') {
+      const { data, error } = await this.supabase.admin
+        .from('guardian_links')
+        .select('student_id')
+        .eq('guardian_id', user.id)
+        .eq('student_id', studentId)
+        .maybeSingle();
+      if (error) {
+        throw new InternalServerErrorException();
+      }
+      return !!data;
+    }
+    if (membership.role === 'teacher') {
+      const { data, error } = await this.supabase.admin
+        .from('subjects')
+        .select('id')
+        .eq('teacher_id', user.id)
+        .in('course_id', courseIds);
+      if (error) {
+        throw new InternalServerErrorException();
+      }
+      return (data?.length ?? 0) > 0;
+    }
+    return false;
   }
 
   // Loads the subject scoped to the member's school. 404 when the subject is
