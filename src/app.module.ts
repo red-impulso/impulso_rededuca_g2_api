@@ -15,6 +15,7 @@ import { InstitutionModule } from './modules/institution/institution.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { StudentsModule } from './modules/students/students.module.js';
 import { TeachersModule } from './modules/teachers/teachers.module.js';
+import { UsersModule } from './modules/users/users.module.js';
 import { SupabaseModule } from './supabase/supabase.module.js';
 
 @Module({
@@ -32,6 +33,7 @@ import { SupabaseModule } from './supabase/supabase.module.js';
     GuardiansModule,
     TeachersModule,
     StudentsModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],
