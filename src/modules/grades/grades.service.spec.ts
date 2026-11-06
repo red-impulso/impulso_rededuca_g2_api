@@ -715,9 +715,13 @@ describe('GradesService', () => {
       studentInSchool();
       queues.subjects = [{ data: [], error: null }];
 
-      await authed(
+      const response = await authed(
         request(app.getHttpServer()).get('/students/stu-1/grades'),
       ).expect(403);
+
+      expect(response.body.message).toBe(
+        'No podés ver las notas de este alumno',
+      );
     });
 
     it.each(['admin', 'director'])(
