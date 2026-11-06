@@ -74,6 +74,14 @@ Para verificar: `GET /health` → `200 { "status": "ok" }`.
 
 ## Base de datos (Supabase)
 
+El CLI de Supabase está instalado como devDependency; se invoca con:
+
+```bash
+npm run supabase -- <comando>   # ej: npm run supabase -- db push --db-url "$SUPABASE_DB_URL"
+```
+
+Los comandos que levantan el stack local (`start`, `status`, `stop`, `db reset`) requieren Docker Desktop instalado y corriendo. Los que apuntan a la base remota (`link`, `db push --db-url`, `projects list`) funcionan sin Docker.
+
 El esquema vive como migraciones SQL en `supabase/migrations/`. Incluye las tablas `schools`, `profiles`, `memberships`, `courses`, `subjects` y `enrollments`, con políticas RLS que limitan cada usuario a los datos de sus escuelas (un usuario puede pertenecer a varias vía `memberships`).
 
 - **Crear una migración nueva:** `supabase migration new <nombre>` (o agregar un archivo `YYYYMMDDHHMMSS_descripcion.sql` en `supabase/migrations/`).
