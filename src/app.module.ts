@@ -13,6 +13,7 @@ import { GradesModule } from './modules/grades/grades.module.js';
 import { GuardiansModule } from './modules/guardians/guardians.module.js';
 import { InstitutionModule } from './modules/institution/institution.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
+import { TeachersModule } from './modules/teachers/teachers.module.js';
 import { SupabaseModule } from './supabase/supabase.module.js';
 
 @Module({
@@ -28,6 +29,7 @@ import { SupabaseModule } from './supabase/supabase.module.js';
     DashboardModule,
     InstitutionModule,
     GuardiansModule,
+    TeachersModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],
