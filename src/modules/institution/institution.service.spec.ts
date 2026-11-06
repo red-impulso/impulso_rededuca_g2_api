@@ -139,6 +139,64 @@ describe('InstitutionService', () => {
     await app.close();
   });
 
+  describe('GET /institution', () => {
+    it('returns the institution data', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.schools = [
+        {
+          data: {
+            id: 'school-1',
+            name: 'Escuela Demo',
+            address: null,
+            levels: null,
+          },
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/institution'),
+      ).expect(200);
+
+      expect(response.body).toEqual({
+        id: 'school-1',
+        name: 'Escuela Demo',
+        address: null,
+        levels: [],
+      });
+    });
+
+    it.each(['teacher', 'guardian'])('returns 403 for a %s', async (role) => {
+      authAs('user-1');
+      memberAs(role);
+
+      await authed(request(app.getHttpServer()).get('/institution')).expect(
+        403,
+      );
+    });
+  });
+
+  describe('POST /subjects with a malformed teacher', () => {
+    it('returns 400 instead of a database error', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.courses = [{ data: { id: 'course-1' }, error: null }];
+
+      const response = await authed(
+        request(app.getHttpServer()).post('/subjects').send({
+          name: 'Arte',
+          courseId: '11111111-1111-4111-8111-111111111111',
+          teacherMembershipId: 'no-es-un-id',
+        }),
+      ).expect(400);
+
+      expect(response.body.message).toBe(
+        'El docente indicado no pertenece a la institución',
+      );
+    });
+  });
+
   describe('PATCH /institution', () => {
     it('lets an admin update name, address and levels', async () => {
       authAs('admin-1');

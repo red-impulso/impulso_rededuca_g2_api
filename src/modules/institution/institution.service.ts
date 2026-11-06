@@ -75,6 +75,23 @@ function isUniqueViolation(error: unknown): boolean {
 export class InstitutionService {
   constructor(private readonly supabase: SupabaseService) {}
 
+  async getInstitution(
+    membership: ActiveMembership,
+  ): Promise<InstitutionResponse> {
+    const { data, error } = await this.supabase.admin
+      .from('schools')
+      .select('id, name, address, levels')
+      .eq('id', membership.institutionId)
+      .single();
+
+    if (error || !data) {
+      throw new InternalServerErrorException();
+    }
+
+    const row = data as InstitutionResponse & { levels: string[] | null };
+    return { ...row, levels: row.levels ?? [] };
+  }
+
   async updateInstitution(
     membership: ActiveMembership,
     dto: UpdateInstitutionDto,
@@ -467,6 +484,11 @@ export class InstitutionService {
       dto.teacherMembershipId === null
     ) {
       return null;
+    }
+    if (!UUID_RE.test(dto.teacherMembershipId)) {
+      throw new BadRequestException(
+        'El docente indicado no pertenece a la institución',
+      );
     }
     const { data, error } = await this.supabase.admin
       .from('memberships')
