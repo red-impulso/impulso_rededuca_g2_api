@@ -196,6 +196,52 @@ describe('AttendanceService', () => {
       ]);
     });
 
+    it('leaves inactive students out of the sheet', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      courseExists();
+      teacherInCourse();
+      queues.attendance_records = [{ data: [], error: null }];
+      queues.enrollments = [
+        {
+          data: [
+            {
+              student_id: 'stu-1',
+              profiles: {
+                id: 'stu-1',
+                first_name: 'Ana',
+                last_name: 'García',
+                status: 'active',
+              },
+            },
+            {
+              student_id: 'stu-2',
+              profiles: {
+                id: 'stu-2',
+                first_name: 'Bruno',
+                last_name: 'Díaz',
+                status: 'inactive',
+              },
+            },
+          ],
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get(
+          `/attendance?courseId=course-1&date=${PAST_DATE}`,
+        ),
+      ).expect(200);
+
+      expect(response.body).toEqual([
+        {
+          student: { id: 'stu-1', firstName: 'Ana', lastName: 'García' },
+          status: null,
+        },
+      ]);
+    });
+
     it('returns 403 for a teacher without a subject in the course', async () => {
       authAs('teacher-1');
       memberAs('teacher');

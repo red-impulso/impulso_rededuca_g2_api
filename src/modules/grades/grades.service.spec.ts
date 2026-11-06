@@ -240,6 +240,52 @@ describe('GradesService', () => {
       ]);
     });
 
+    it('leaves inactive students out of the sheet', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      teacherSubject();
+      periodExists();
+      queues.enrollments = [
+        {
+          data: [
+            {
+              student_id: 'stu-1',
+              profiles: {
+                id: 'stu-1',
+                first_name: 'Ana',
+                last_name: 'García',
+                status: 'active',
+              },
+            },
+            {
+              student_id: 'stu-2',
+              profiles: {
+                id: 'stu-2',
+                first_name: 'Bruno',
+                last_name: 'Díaz',
+                status: 'inactive',
+              },
+            },
+          ],
+          error: null,
+        },
+      ];
+      queues.grades = [{ data: [], error: null }];
+
+      const response = await authed(
+        request(app.getHttpServer()).get(
+          '/grades?subjectId=subject-1&periodId=period-1',
+        ),
+      ).expect(200);
+
+      expect(response.body).toEqual([
+        {
+          student: { id: 'stu-1', firstName: 'Ana', lastName: 'García' },
+          value: null,
+        },
+      ]);
+    });
+
     it('returns 403 for a teacher of another subject', async () => {
       authAs('teacher-1');
       memberAs('teacher');

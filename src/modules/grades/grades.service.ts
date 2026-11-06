@@ -53,8 +53,18 @@ interface SubjectRow {
 interface EnrollmentRow {
   student_id: string;
   profiles:
-    | { id: string; first_name: string | null; last_name: string | null }
-    | { id: string; first_name: string | null; last_name: string | null }[]
+    | {
+        id: string;
+        first_name: string | null;
+        last_name: string | null;
+        status?: string;
+      }
+    | {
+        id: string;
+        first_name: string | null;
+        last_name: string | null;
+        status?: string;
+      }[]
     | null;
 }
 
@@ -131,7 +141,9 @@ export class GradesService {
     const { data: enrollments, error: enrollmentsError } =
       await this.supabase.admin
         .from('enrollments')
-        .select('student_id, profiles!inner(id, first_name, last_name)')
+        .select(
+          'student_id, profiles!inner(id, first_name, last_name, status)',
+        )
         .eq('course_id', subject.course_id);
 
     if (enrollmentsError) {
@@ -143,7 +155,8 @@ export class GradesService {
     return ((enrollments ?? []) as EnrollmentRow[])
       .flatMap((row) => {
         const profile = firstRow(row.profiles);
-        return profile
+        // Inactive students keep their history but leave the sheet.
+        return profile && profile.status !== 'inactive'
           ? [
               {
                 student: {
@@ -431,14 +444,19 @@ export class GradesService {
   private async loadEnrolledStudentIds(courseId: string): Promise<Set<string>> {
     const { data, error } = await this.supabase.admin
       .from('enrollments')
-      .select('student_id')
+      .select('student_id, profiles!inner(status)')
       .eq('course_id', courseId);
 
     if (error) {
       throw new InternalServerErrorException();
     }
     return new Set(
-      (data ?? []).map((row: { student_id: string }) => row.student_id),
+      (data ?? [])
+        .filter(
+          (row: { student_id: string; profiles: { status: string } | { status: string }[] | null }) =>
+            firstRow(row.profiles)?.status !== 'inactive',
+        )
+        .map((row: { student_id: string }) => row.student_id),
     );
   }
 
