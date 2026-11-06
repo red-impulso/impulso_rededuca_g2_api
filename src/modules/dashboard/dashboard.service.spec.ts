@@ -31,6 +31,7 @@ describe('DashboardService', () => {
       is: vi.fn(),
       order: vi.fn(),
       limit: vi.fn(),
+      range: vi.fn(),
       maybeSingle: vi.fn(),
       single: vi.fn(),
       upsert: vi.fn(),
@@ -49,6 +50,7 @@ describe('DashboardService', () => {
       'is',
       'order',
       'limit',
+      'range',
       'maybeSingle',
       'single',
       'upsert',
@@ -145,6 +147,34 @@ describe('DashboardService', () => {
         lowAttendance: [],
         gradeAverages: [],
       });
+    });
+
+    it('reads every page: Supabase returns 1000 rows at most per query', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      const rows = (count: number, status: string) =>
+        Array.from({ length: count }, (_, i) => ({
+          student_id: `stu-${i}`,
+          status,
+          date: recentDate(),
+        }));
+      queues.memberships.push({ data: [], error: null });
+      queues.courses = [{ data: [], error: null }];
+      queues.subjects = [{ data: [], error: null }];
+      queues.grades = [{ data: [], error: null }];
+      queues.attendance_records = [
+        { data: rows(1000, 'present'), error: null },
+        { data: rows(1000, 'absent'), error: null },
+        { data: rows(0, 'absent'), error: null },
+      ];
+      queues.enrollments = [{ data: [], error: null }];
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/dashboard'),
+      ).expect(200);
+
+      expect(response.body.attendanceAverage).toBe(50);
+      expect(queues.attendance_records).toHaveLength(0);
     });
 
     it('computes counts, averages, low attendance and grade averages', async () => {
