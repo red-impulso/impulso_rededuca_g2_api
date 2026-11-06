@@ -39,6 +39,12 @@ interface NewNotification {
 
 const INBOX_LIMIT = 50;
 
+// "2026-11-06" -> "06/11/2026": the title is read as is by the guardians.
+function displayDate(date: string): string {
+  const [year, month, day] = date.split('-');
+  return `${day}/${month}/${year}`;
+}
+
 function toView(row: NotificationRow): NotificationView {
   return {
     id: row.id,
@@ -106,7 +112,7 @@ export class NotificationsService {
       throw new InternalServerErrorException();
     }
     if (!data) {
-      throw new NotFoundException('Notification not found');
+      throw new NotFoundException('No se encontró la notificación');
     }
 
     const row = data as NotificationRow;
@@ -212,7 +218,7 @@ export class NotificationsService {
           school_id: payload.schoolId,
           user_id: link.guardian_id,
           type: 'attendance',
-          title: `${nameOf.get(link.student_id) ?? 'El alumno'} estuvo ausente el ${payload.date}`,
+          title: `${nameOf.get(link.student_id) ?? 'El alumno'} estuvo ausente el ${displayDate(payload.date)}`,
         }),
       ),
     );

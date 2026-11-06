@@ -250,12 +250,12 @@ describe('NotificationsService', () => {
           {
             user_id: 'guardian-1',
             type: 'attendance',
-            title: 'Ana García estuvo ausente el 2020-01-15',
+            title: 'Ana García estuvo ausente el 15/01/2020',
           },
           {
             user_id: 'guardian-2',
             type: 'attendance',
-            title: 'Bruno Díaz estuvo ausente el 2020-01-15',
+            title: 'Bruno Díaz estuvo ausente el 15/01/2020',
           },
         ],
       });
@@ -429,10 +429,11 @@ describe('NotificationsService', () => {
       memberAs('guardian');
       queues.notifications = [{ data: null, error: null }];
 
-      await authed(
+      const response = await authed(
         request(app.getHttpServer()).post('/notifications/notif-other/read'),
       ).expect(404);
 
+      expect(response.body.message).toBe('No se encontró la notificación');
       expect(writes).toHaveLength(0);
     });
   });
