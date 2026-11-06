@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Put,
   Query,
   Req,
@@ -41,6 +42,16 @@ export class GradesController {
       );
     }
     return this.grades.getSheet(request.user, membership, subjectId, periodId);
+  }
+
+  @Get('students/:studentId/grades')
+  @UseGuards(MembershipGuard)
+  getStudentGrades(
+    @Req() request: AuthedRequest,
+    @CurrentMembership() membership: ActiveMembership,
+    @Param('studentId') studentId: string,
+  ) {
+    return this.grades.getStudentGrades(request.user, membership, studentId);
   }
 
   @Put('grades')
