@@ -18,6 +18,8 @@ export const ANNOUNCEMENT_CREATED_EVENT = 'announcement.created';
 
 const SCOPES: AnnouncementScope[] = ['institution', 'course', 'student'];
 const MANAGER_ROLES = ['admin', 'director'];
+const ANNOUNCEMENT_COLUMNS =
+  'id, scope, course_id, student_id, title, body, created_at, profiles!announcements_created_by_fkey(full_name), courses(year, division)';
 
 export interface AnnouncementCreatedPayload {
   schoolId: string;
@@ -37,6 +39,8 @@ export interface AnnouncementView {
   title: string;
   body: string;
   createdAt: string;
+  authorName: string | null;
+  courseLabel: string | null;
 }
 
 interface AnnouncementRow {
@@ -47,9 +51,20 @@ interface AnnouncementRow {
   title: string;
   body: string;
   created_at: string;
+  profiles?:
+    { full_name: string | null } | { full_name: string | null }[] | null;
+  courses?:
+    | { year: number; division: string }
+    | { year: number; division: string }[]
+    | null;
+}
+
+function firstRow<T>(value: T | T[] | null | undefined): T | undefined {
+  return Array.isArray(value) ? value[0] : (value ?? undefined);
 }
 
 function toView(row: AnnouncementRow): AnnouncementView {
+  const course = firstRow(row.courses);
   return {
     id: row.id,
     scope: row.scope,
@@ -58,6 +73,8 @@ function toView(row: AnnouncementRow): AnnouncementView {
     title: row.title,
     body: row.body,
     createdAt: row.created_at,
+    authorName: firstRow(row.profiles)?.full_name ?? null,
+    courseLabel: course ? `${course.year}°${course.division}` : null,
   };
 }
 
@@ -84,16 +101,22 @@ export class AnnouncementsService {
       !dto.body.trim()
     ) {
       throw new BadRequestException(
-        'Body must be { scope, title, body } with a valid scope and non-empty title and body',
+        'El comunicado debe tener alcance, título y texto',
       );
+    }
+    if (dto.scope === 'course' && !dto.courseId) {
+      throw new BadRequestException('Falta elegir el curso');
+    }
+    if (dto.scope === 'student' && !dto.studentId) {
+      throw new BadRequestException('Falta elegir el alumno');
     }
     if (
       (dto.scope === 'institution' && (dto.courseId || dto.studentId)) ||
-      (dto.scope === 'course' && (!dto.courseId || dto.studentId)) ||
-      (dto.scope === 'student' && (!dto.studentId || dto.courseId))
+      (dto.scope === 'course' && dto.studentId) ||
+      (dto.scope === 'student' && dto.courseId)
     ) {
       throw new BadRequestException(
-        "scope 'course' needs courseId, 'student' needs studentId, 'institution' takes neither",
+        'El alcance no coincide con el curso o el alumno elegido',
       );
     }
 
@@ -102,7 +125,7 @@ export class AnnouncementsService {
       !isManager &&
       !(membership.role === 'teacher' && dto.scope === 'course')
     ) {
-      throw new ForbiddenException('You cannot post announcements');
+      throw new ForbiddenException('No podés publicar este comunicado');
     }
 
     let courseId: string | null = null;
@@ -129,7 +152,7 @@ export class AnnouncementsService {
         body: dto.body.trim(),
         created_by: user.id,
       })
-      .select('id, scope, course_id, student_id, title, body, created_at')
+      .select(ANNOUNCEMENT_COLUMNS)
       .single();
 
     if (error || !data) {
@@ -160,7 +183,7 @@ export class AnnouncementsService {
   ): Promise<AnnouncementView[]> {
     const { data, error } = await this.supabase.admin
       .from('announcements')
-      .select('id, scope, course_id, student_id, title, body, created_at')
+      .select(ANNOUNCEMENT_COLUMNS)
       .eq('school_id', membership.institutionId)
       .order('created_at', { ascending: false });
 
@@ -282,7 +305,7 @@ export class AnnouncementsService {
       throw new InternalServerErrorException();
     }
     if (!data) {
-      throw new NotFoundException('Course not found');
+      throw new NotFoundException('No se encontró el curso');
     }
 
     if (MANAGER_ROLES.includes(membership.role)) {
@@ -292,13 +315,13 @@ export class AnnouncementsService {
       .from('subjects')
       .select('id')
       .eq('course_id', courseId)
-      .eq('teacher_id', user.id)
-      .maybeSingle();
+      .eq('teacher_id', user.id);
     if (subjectsError) {
       throw new InternalServerErrorException();
     }
-    if (!subjects) {
-      throw new ForbiddenException('You do not teach in this course');
+    // A teacher can have several subjects in the same course.
+    if (!subjects?.length) {
+      throw new ForbiddenException('No das clases en este curso');
     }
     return courseId;
   }
@@ -311,13 +334,13 @@ export class AnnouncementsService {
       .from('enrollments')
       .select('student_id, courses!inner(school_id)')
       .eq('student_id', studentId)
-      .eq('courses.school_id', membership.institutionId)
-      .maybeSingle();
+      .eq('courses.school_id', membership.institutionId);
     if (error) {
       throw new InternalServerErrorException();
     }
-    if (!data) {
-      throw new NotFoundException('Student not found');
+    // A student can be enrolled in more than one course of the school.
+    if (!data?.length) {
+      throw new NotFoundException('No se encontró el alumno');
     }
     return studentId;
   }
