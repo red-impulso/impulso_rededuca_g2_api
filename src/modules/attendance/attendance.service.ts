@@ -97,9 +97,7 @@ export class AttendanceService {
     date: string,
   ): Promise<AttendanceSheetRow[]> {
     if (!isValidAttendanceDate(date)) {
-      throw new BadRequestException(
-        'date must be a valid YYYY-MM-DD, not in the future',
-      );
+      throw new BadRequestException('La fecha no es válida o es futura');
     }
     await this.loadCourseForTaker(user, membership, courseId);
     const records = await this.loadRecords(courseId, date);
@@ -130,13 +128,11 @@ export class AttendanceService {
       !Array.isArray(dto.entries)
     ) {
       throw new BadRequestException(
-        'Body must be { courseId, date, entries: [{ studentId, status }] }',
+        'El pedido debe incluir el curso, la fecha y la lista',
       );
     }
     if (!isValidAttendanceDate(dto.date)) {
-      throw new BadRequestException(
-        'date must be a valid YYYY-MM-DD, not in the future',
-      );
+      throw new BadRequestException('La fecha no es válida o es futura');
     }
 
     const courseId = await this.loadCourseForTaker(
@@ -155,13 +151,15 @@ export class AttendanceService {
         !ATTENDANCE_STATUSES.includes(entry.status)
       ) {
         throw new BadRequestException(
-          'Every entry needs a student enrolled in the course and a status of present, absent, late or justified',
+          'Cada alumno tiene que ser del curso y tener un estado válido',
         );
       }
       entries.set(entry.studentId, entry.status);
     }
 
     if (entries.size > 0) {
+      const previous = await this.loadRecords(courseId, dto.date);
+
       const { error } = await this.supabase.admin
         .from('attendance_records')
         .upsert(
@@ -171,6 +169,7 @@ export class AttendanceService {
             date: dto.date,
             status,
             recorded_by: user.id,
+            updated_at: new Date().toISOString(),
           })),
           { onConflict: 'student_id,date' },
         );
@@ -184,8 +183,13 @@ export class AttendanceService {
         courseId,
         date: dto.date,
         recordedBy: user.id,
+        // Only who became absent: saving the list again must not repeat the
+        // notice to the guardians.
         absent: [...entries]
-          .filter(([, status]) => status === 'absent')
+          .filter(
+            ([studentId, status]) =>
+              status === 'absent' && previous.get(studentId) !== 'absent',
+          )
           .map(([studentId]) => studentId),
       };
       this.events.emit(ATTENDANCE_SAVED_EVENT, payload);
@@ -213,7 +217,7 @@ export class AttendanceService {
       throw new InternalServerErrorException();
     }
     if (!enrollments?.length) {
-      throw new NotFoundException('Student not found');
+      throw new NotFoundException('No se encontró el alumno');
     }
 
     const allowed = await this.canViewStudentAttendance(
@@ -223,7 +227,7 @@ export class AttendanceService {
       enrollments.map((row: { course_id: string }) => row.course_id),
     );
     if (!allowed) {
-      throw new ForbiddenException();
+      throw new ForbiddenException('No podés ver la asistencia de este alumno');
     }
 
     const { data, error } = await this.supabase.admin
@@ -279,7 +283,7 @@ export class AttendanceService {
       throw new InternalServerErrorException();
     }
     if (!data) {
-      throw new NotFoundException('Course not found');
+      throw new NotFoundException('No se encontró el curso');
     }
 
     if (membership.role === 'admin' || membership.role === 'director') {
@@ -290,14 +294,14 @@ export class AttendanceService {
       .from('subjects')
       .select('id')
       .eq('course_id', courseId)
-      .eq('teacher_id', user.id)
-      .maybeSingle();
+      .eq('teacher_id', user.id);
 
     if (subjectsError) {
       throw new InternalServerErrorException();
     }
-    if (!subjects) {
-      throw new ForbiddenException('You do not teach in this course');
+    // A teacher can have several subjects in the same course.
+    if (!subjects?.length) {
+      throw new ForbiddenException('No das clases en este curso');
     }
     return courseId;
   }

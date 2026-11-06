@@ -27,7 +27,7 @@ export class MeController {
 
   @Get('courses')
   @UseGuards(MembershipGuard)
-  @Roles('teacher')
+  @Roles('teacher', 'admin', 'director')
   getCourses(
     @Req() request: AuthedRequest,
     @CurrentMembership() membership: ActiveMembership,

@@ -320,7 +320,38 @@ describe('MeController', () => {
       ]);
     });
 
-    it('returns 403 for a non-teacher membership', async () => {
+    it.each(['admin', 'director'])(
+      'returns every course of the school to a %s, sorted',
+      async (role) => {
+        authAs(`${role}-1`);
+        memberAs(role);
+        results.courses = {
+          data: [
+            { id: 'c-2', year: 2, division: 'A', shift: 'morning' },
+            { id: 'c-1', year: 1, division: 'B', shift: 'morning' },
+            { id: 'c-3', year: 1, division: 'A', shift: 'morning' },
+          ],
+          error: null,
+        };
+
+        const response = await authed(
+          request(app.getHttpServer()).get('/me/courses'),
+        ).expect(200);
+
+        expect(chains.courses.eq).toHaveBeenCalledWith('school_id', 'school-1');
+        expect(chains.courses.eq).not.toHaveBeenCalledWith(
+          'subjects.teacher_id',
+          expect.anything(),
+        );
+        expect(response.body.map((c: { id: string }) => c.id)).toEqual([
+          'c-3',
+          'c-1',
+          'c-2',
+        ]);
+      },
+    );
+
+    it('returns 403 for a guardian membership', async () => {
       authAs('guardian-1');
       memberAs('guardian');
 

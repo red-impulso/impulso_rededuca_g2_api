@@ -37,6 +37,7 @@ describe('AttendanceService', () => {
   // A thenable stand-in for the supabase query builder: every method returns
   // the chain itself and awaiting it resolves to the next queued result.
   function makeChain(table: string) {
+    let single = false;
     const chain = {
       select: vi.fn(),
       eq: vi.fn(),
@@ -46,10 +47,16 @@ describe('AttendanceService', () => {
       upsert: vi.fn(),
       insert: vi.fn(),
       // oxlint-disable-next-line no-thenable -- supabase builders are thenable
-      then: (onFulfilled: (value: QueryResult) => unknown) =>
-        Promise.resolve(
-          queues[table]?.shift() ?? { data: null, error: null },
-        ).then(onFulfilled),
+      then: (onFulfilled: (value: QueryResult) => unknown) => {
+        const result = queues[table]?.shift() ?? { data: null, error: null };
+        const tooMany =
+          single && Array.isArray(result.data) && result.data.length > 1;
+        return Promise.resolve(
+          tooMany
+            ? { data: null, error: { message: 'multiple rows returned' } }
+            : result,
+        ).then(onFulfilled);
+      },
     };
     for (const method of [
       'select',
@@ -60,6 +67,10 @@ describe('AttendanceService', () => {
     ] as const) {
       chain[method].mockReturnValue(chain);
     }
+    chain.maybeSingle.mockImplementation(() => {
+      single = true;
+      return chain;
+    });
     for (const method of ['upsert', 'insert'] as const) {
       chain[method].mockImplementation((rows: unknown) => {
         writes.push({ table, method, rows });
@@ -103,11 +114,11 @@ describe('AttendanceService', () => {
   };
 
   const teacherInCourse = () => {
-    queues.subjects = [{ data: { id: 'subject-1' }, error: null }];
+    queues.subjects = [{ data: [{ id: 'subject-1' }], error: null }];
   };
 
   const teacherOutsideCourse = () => {
-    queues.subjects = [{ data: null, error: null }];
+    queues.subjects = [{ data: [], error: null }];
   };
 
   const enrolled = (...studentIds: string[]) => {
@@ -286,6 +297,97 @@ describe('AttendanceService', () => {
           absent: ['stu-2'],
         }),
       );
+    });
+
+    it('lets a teacher with two subjects in the course take the list', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      courseExists();
+      queues.subjects = [
+        { data: [{ id: 'subject-1' }, { id: 'subject-2' }], error: null },
+      ];
+      enrolled('stu-1');
+
+      await authed(
+        request(app.getHttpServer())
+          .put('/attendance')
+          .send(takeSheet([{ studentId: 'stu-1', status: 'present' }])),
+      ).expect(200);
+    });
+
+    it('reports only the students who became absent, so saving again does not repeat notices', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      courseExists();
+      teacherInCourse();
+      enrolled('stu-1', 'stu-2', 'stu-3');
+      queues.attendance_records = [
+        {
+          data: [
+            { student_id: 'stu-1', status: 'absent' },
+            { student_id: 'stu-2', status: 'present' },
+          ],
+          error: null,
+        },
+        { data: null, error: null },
+      ];
+      const emit = vi.spyOn(events, 'emit');
+
+      await authed(
+        request(app.getHttpServer())
+          .put('/attendance')
+          .send(
+            takeSheet([
+              { studentId: 'stu-1', status: 'absent' },
+              { studentId: 'stu-2', status: 'absent' },
+              { studentId: 'stu-3', status: 'absent' },
+            ]),
+          ),
+      ).expect(200);
+
+      expect(emit).toHaveBeenCalledWith(
+        ATTENDANCE_SAVED_EVENT,
+        expect.objectContaining({ absent: ['stu-2', 'stu-3'] }),
+      );
+    });
+
+    it('refreshes updated_at when the list is saved', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      courseExists();
+      teacherInCourse();
+      enrolled('stu-1');
+
+      await authed(
+        request(app.getHttpServer())
+          .put('/attendance')
+          .send(takeSheet([{ studentId: 'stu-1', status: 'present' }])),
+      ).expect(200);
+
+      expect(writes[0]).toMatchObject({
+        rows: [{ updated_at: expect.any(String) }],
+      });
+    });
+
+    it('answers in Spanish for a future date and for a course the teacher does not teach', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      const future = await authed(
+        request(app.getHttpServer())
+          .put('/attendance')
+          .send(takeSheet([], '2999-01-01')),
+      ).expect(400);
+      expect(future.body.message).toBe('La fecha no es válida o es futura');
+
+      memberAs('teacher');
+      courseExists();
+      teacherOutsideCourse();
+      const forbidden = await authed(
+        request(app.getHttpServer())
+          .put('/attendance')
+          .send(takeSheet([{ studentId: 'stu-1', status: 'present' }])),
+      ).expect(403);
+      expect(forbidden.body.message).toBe('No das clases en este curso');
     });
 
     it('lets an admin take the list without teaching in the course', async () => {
