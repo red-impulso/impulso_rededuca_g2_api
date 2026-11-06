@@ -19,6 +19,7 @@ export interface GradesSavedPayload {
   periodId: string;
   saved: number;
   updatedBy: string;
+  students: string[];
 }
 
 export interface PeriodSummary {
@@ -270,6 +271,7 @@ export class GradesService {
         periodId: dto.periodId,
         saved: changed.length,
         updatedBy: user.id,
+        students: changed.map(([studentId]) => studentId),
       };
       this.events.emit(GRADES_SAVED_EVENT, payload);
     }

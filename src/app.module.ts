@@ -10,6 +10,7 @@ import { AnnouncementsModule } from './modules/announcements/announcements.modul
 import { AttendanceModule } from './modules/attendance/attendance.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { GradesModule } from './modules/grades/grades.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { SupabaseModule } from './supabase/supabase.module.js';
 
 @Module({
@@ -21,6 +22,7 @@ import { SupabaseModule } from './supabase/supabase.module.js';
     GradesModule,
     AttendanceModule,
     AnnouncementsModule,
+    NotificationsModule,
     DashboardModule,
   ],
   controllers: [AppController],
