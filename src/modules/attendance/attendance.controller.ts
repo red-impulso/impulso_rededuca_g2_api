@@ -31,9 +31,7 @@ export class AttendanceController {
     @Query('date') date?: string,
   ) {
     if (!courseId || !date) {
-      throw new BadRequestException(
-        'courseId and date query params are required',
-      );
+      throw new BadRequestException('Falta elegir el curso y la fecha');
     }
     return this.attendance.getSheet(request.user, membership, courseId, date);
   }

@@ -157,6 +157,21 @@ export class MeService {
     user: AuthUser,
     membership: ActiveMembership,
   ): Promise<CourseSummary[]> {
+    // Admin and director work with every course of the school.
+    if (membership.role === 'admin' || membership.role === 'director') {
+      const { data, error } = await this.supabase.admin
+        .from('courses')
+        .select('id, year, division, shift')
+        .eq('school_id', membership.institutionId);
+
+      if (error) {
+        throw new InternalServerErrorException();
+      }
+      return ((data ?? []) as CourseRow[]).sort(
+        (a, b) => a.year - b.year || a.division.localeCompare(b.division),
+      );
+    }
+
     const { data, error } = await this.supabase.admin
       .from('courses')
       .select('id, year, division, shift, subjects!inner(id)')
