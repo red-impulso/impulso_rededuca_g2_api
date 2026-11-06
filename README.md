@@ -47,6 +47,20 @@ Los endpoints de una institución se protegen con `MembershipGuard` (`@UseGuards
 - `GET /me/courses` (roles `teacher`, `admin`, `director`) → `[{ id, year, division, shift }]`: para `teacher`, los cursos donde tiene al menos una materia; para `admin` y `director`, todos los de la institución.
 - `GET /me/students` (rol `guardian`) → `[{ id, firstName, lastName, course: { id, year, division } }]`: los estudiantes vinculados por `guardian_links`, con su curso en la institución.
 
+### ABM de la institución
+
+Endpoints para que la escuela cargue y edite sus datos, cursos y materias. Todos requieren `X-Institution-Id` y rol `admin` o `director`.
+
+- `PATCH /institution` → `{ name?, address?, levels? }` (al menos un campo; `address: null` la borra, `levels` es una lista de textos). Devuelve la institución actualizada.
+- `GET /courses` → `[{ id, year, division, shift, schoolYear }]`, ordenados por ciclo lectivo, año y división.
+- `POST /courses` → `{ year, division, shift, schoolYear }`. `shift` es `morning` | `afternoon` | `evening`. Duplicado (mismo año, división, turno y ciclo) → `409`.
+- `PATCH /courses/:id` → mismo payload parcial. Curso de otra institución → `404`; duplicado → `409`.
+- `DELETE /courses/:id` → `409` si el curso tiene alumnos inscriptos o materias cargadas (para no borrar notas/asistencias en cascada).
+- `GET /subjects` → `[{ id, name, courseId, teacherMembershipId }]`.
+- `POST /subjects` → `{ name, courseId, teacherMembershipId? }` (`teacherMembershipId` es el id de la membresía con rol `teacher` en la institución). Nombre duplicado en el curso → `409`.
+- `PATCH /subjects/:id` → `{ name?, courseId?, teacherMembershipId? }` (`teacherMembershipId: null` desasigna al docente).
+- `DELETE /subjects/:id`.
+
 ## Correr
 
 ```bash
