@@ -57,6 +57,29 @@ interface DashboardEnrollmentRow {
 
 const LOW_ATTENDANCE_THRESHOLD = 85;
 const LOW_ATTENDANCE_WINDOW_DAYS = 30;
+const PAGE_SIZE = 1000;
+
+// Supabase returns 1000 rows at most per query, and a school reaches that many
+// attendance records in a few days: without paging the numbers would silently
+// be computed from part of the data.
+async function fetchAllRows(
+  query: (
+    from: number,
+    to: number,
+  ) => PromiseLike<{ data: unknown[] | null; error: unknown }>,
+): Promise<{ data: unknown[]; error: unknown }> {
+  const rows: unknown[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await query(from, from + PAGE_SIZE - 1);
+    if (error) {
+      return { data: [], error };
+    }
+    rows.push(...(data ?? []));
+    if ((data?.length ?? 0) < PAGE_SIZE) {
+      return { data: rows, error: null };
+    }
+  }
+}
 
 function firstRow<T>(value: T | T[] | null | undefined): T | undefined {
   return Array.isArray(value) ? value[0] : (value ?? undefined);
@@ -99,10 +122,14 @@ export class DashboardService {
 
     const [memberships, courses, subjects, grades, attendance, enrollments] =
       await Promise.all([
-        this.supabase.admin
-          .from('memberships')
-          .select('role')
-          .eq('school_id', schoolId),
+        fetchAllRows((from, to) =>
+          this.supabase.admin
+            .from('memberships')
+            .select('role')
+            .eq('school_id', schoolId)
+            .order('id')
+            .range(from, to),
+        ),
         this.supabase.admin
           .from('courses')
           .select('id, year, division, shift')
@@ -113,20 +140,35 @@ export class DashboardService {
             'id, name, courses!inner(id, year, division, shift, school_id)',
           )
           .eq('courses.school_id', schoolId),
-        this.supabase.admin
-          .from('grades')
-          .select('value, subject_id, subjects!inner(courses!inner(school_id))')
-          .eq('subjects.courses.school_id', schoolId),
-        this.supabase.admin
-          .from('attendance_records')
-          .select('student_id, status, date, courses!inner(school_id)')
-          .eq('courses.school_id', schoolId),
-        this.supabase.admin
-          .from('enrollments')
-          .select(
-            'student_id, course_id, profiles!inner(id, first_name, last_name), courses!inner(school_id)',
-          )
-          .eq('courses.school_id', schoolId),
+        fetchAllRows((from, to) =>
+          this.supabase.admin
+            .from('grades')
+            .select(
+              'value, subject_id, subjects!inner(courses!inner(school_id))',
+            )
+            .eq('subjects.courses.school_id', schoolId)
+            .order('id')
+            .range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          this.supabase.admin
+            .from('attendance_records')
+            .select('student_id, status, date, courses!inner(school_id)')
+            .eq('courses.school_id', schoolId)
+            .order('id')
+            .range(from, to),
+        ),
+        fetchAllRows((from, to) =>
+          this.supabase.admin
+            .from('enrollments')
+            .select(
+              'student_id, course_id, profiles!inner(id, first_name, last_name), courses!inner(school_id)',
+            )
+            .eq('courses.school_id', schoolId)
+            .order('student_id')
+            .order('course_id')
+            .range(from, to),
+        ),
       ]);
 
     for (const result of [
@@ -143,7 +185,7 @@ export class DashboardService {
     }
 
     const roleCounts = new Map<string, number>();
-    for (const row of (memberships.data ?? []) as { role: string }[]) {
+    for (const row of memberships.data as { role: string }[]) {
       roleCounts.set(row.role, (roleCounts.get(row.role) ?? 0) + 1);
     }
 
@@ -154,7 +196,7 @@ export class DashboardService {
       ]),
     );
 
-    const attendanceRows = (attendance.data ?? []) as AttendanceRow[];
+    const attendanceRows = attendance.data as AttendanceRow[];
     const recentByStudent = new Map<string, AttendanceRow[]>();
     for (const row of attendanceRows) {
       if (row.date >= cutoff) {
@@ -169,7 +211,7 @@ export class DashboardService {
       string,
       { firstName: string | null; lastName: string | null; courseId: string }
     >();
-    for (const row of (enrollments.data ?? []) as DashboardEnrollmentRow[]) {
+    for (const row of enrollments.data as DashboardEnrollmentRow[]) {
       const profile = firstRow(row.profiles);
       if (profile && !studentInfo.has(row.student_id)) {
         studentInfo.set(row.student_id, {
@@ -205,7 +247,7 @@ export class DashboardService {
       .sort((a, b) => a.percentage - b.percentage);
 
     const gradesBySubject = new Map<string, number[]>();
-    for (const row of (grades.data ?? []) as {
+    for (const row of grades.data as {
       subject_id: string;
       value: number;
     }[]) {
