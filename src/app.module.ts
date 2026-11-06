@@ -6,6 +6,7 @@ import { AppService } from './app.service.js';
 import { AuthGuard } from './auth/auth.guard.js';
 import { HealthModule } from './health/health.module.js';
 import { MeModule } from './me/me.module.js';
+import { GradesModule } from './modules/grades/grades.module.js';
 import { SupabaseModule } from './supabase/supabase.module.js';
 
 @Module({
@@ -14,6 +15,7 @@ import { SupabaseModule } from './supabase/supabase.module.js';
     SupabaseModule,
     HealthModule,
     MeModule,
+    GradesModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],
