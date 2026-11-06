@@ -525,6 +525,81 @@ describe('GradesService', () => {
       ).expect(403);
     });
 
+    it('refreshes updated_at when a grade is saved', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      teacherSubject();
+      periodExists();
+      enrolled('stu-1');
+      queues.grades = [
+        { data: [{ id: 'g-1', student_id: 'stu-1', value: 7 }], error: null },
+        { data: [{ id: 'g-1', student_id: 'stu-1' }], error: null },
+      ];
+      queues.grade_changes = [{ data: null, error: null }];
+
+      await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(sheet([{ studentId: 'stu-1', value: 8 }])),
+      ).expect(200);
+
+      expect(writes[0]).toMatchObject({
+        table: 'grades',
+        method: 'upsert',
+        rows: [{ updated_at: expect.any(String) }],
+      });
+    });
+
+    it.each([0, 11, 7.123, '8'])(
+      'returns 400 in Spanish for the invalid grade %s and saves nothing',
+      async (value) => {
+        authAs('teacher-1');
+        memberAs('teacher');
+        teacherSubject();
+        periodExists();
+        enrolled('stu-1');
+
+        const response = await authed(
+          request(app.getHttpServer())
+            .put('/grades')
+            .send({
+              subjectId: 'subject-1',
+              periodId: 'period-1',
+              entries: [{ studentId: 'stu-1', value }],
+            }),
+        ).expect(400);
+
+        expect(response.body.message).toBe(
+          'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales',
+        );
+        expect(writes).toHaveLength(0);
+      },
+    );
+
+    it('explains in Spanish when the teacher does not teach the subject', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      queues.subjects = [
+        {
+          data: {
+            id: 'subject-1',
+            teacher_id: 'teacher-2',
+            course_id: 'course-1',
+            courses: { id: 'course-1', school_id: 'school-1' },
+          },
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(sheet([{ studentId: 'stu-1', value: 8 }])),
+      ).expect(403);
+
+      expect(response.body.message).toBe('No dictás esta materia');
+    });
+
     it('returns 400 for a malformed body', async () => {
       authAs('teacher-1');
       memberAs('teacher');

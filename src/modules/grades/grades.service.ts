@@ -163,7 +163,7 @@ export class GradesService {
       !Array.isArray(dto.entries)
     ) {
       throw new BadRequestException(
-        'Body must be { subjectId, periodId, entries: [{ studentId, value }] }',
+        'El pedido debe incluir la materia, el período y las notas',
       );
     }
 
@@ -186,12 +186,12 @@ export class GradesService {
         !enrolledIds.has(entry.studentId)
       ) {
         throw new BadRequestException(
-          'Every entry must reference a student enrolled in the course',
+          'Cada nota tiene que ser de un alumno del curso',
         );
       }
       if (entry.value !== null && !isGradeValue(entry.value)) {
         throw new BadRequestException(
-          'Grades must be a number between 1 and 10 with at most 2 decimals',
+          'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales',
         );
       }
       entries.set(entry.studentId, entry.value);
@@ -213,6 +213,7 @@ export class GradesService {
             period_id: dto.periodId,
             value,
             updated_by: user.id,
+            updated_at: new Date().toISOString(),
           })),
           { onConflict: 'student_id,subject_id,period_id' },
         )
@@ -284,10 +285,10 @@ export class GradesService {
 
     const subject = firstRow(data as SubjectRow | SubjectRow[] | null);
     if (!subject) {
-      throw new NotFoundException('Subject not found');
+      throw new NotFoundException('No se encontró la materia');
     }
     if (subject.teacher_id !== user.id) {
-      throw new ForbiddenException('You do not teach this subject');
+      throw new ForbiddenException('No dictás esta materia');
     }
     return { id: subject.id, course_id: subject.course_id };
   }
@@ -307,7 +308,7 @@ export class GradesService {
       throw new InternalServerErrorException();
     }
     if (!data) {
-      throw new NotFoundException('Period not found');
+      throw new NotFoundException('No se encontró el período');
     }
   }
 

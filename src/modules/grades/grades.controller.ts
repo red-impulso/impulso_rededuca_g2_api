@@ -36,9 +36,7 @@ export class GradesController {
     @Query('periodId') periodId?: string,
   ) {
     if (!subjectId || !periodId) {
-      throw new BadRequestException(
-        'subjectId and periodId query params are required',
-      );
+      throw new BadRequestException('Falta elegir la materia y el período');
     }
     return this.grades.getSheet(request.user, membership, subjectId, periodId);
   }
