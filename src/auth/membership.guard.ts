@@ -59,7 +59,7 @@ export class MembershipGuard implements CanActivate {
     const header = request.headers['x-institution-id'];
     const institutionId = typeof header === 'string' ? header.trim() : undefined;
     if (!institutionId) {
-      throw new BadRequestException('Missing X-Institution-Id header');
+      throw new BadRequestException('Falta indicar la institución');
     }
 
     const { data, error } = await this.supabase.admin
@@ -74,7 +74,7 @@ export class MembershipGuard implements CanActivate {
 
     const row = this.pickHighestRank(data ?? []);
     if (!row) {
-      throw new ForbiddenException();
+      throw new ForbiddenException('No tenés permiso para hacer esto');
     }
 
     const allowed = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
@@ -82,7 +82,7 @@ export class MembershipGuard implements CanActivate {
       context.getClass(),
     ]);
     if (allowed?.length && !allowed.includes(row.role)) {
-      throw new ForbiddenException();
+      throw new ForbiddenException('No tenés permiso para hacer esto');
     }
 
     request.membership = {

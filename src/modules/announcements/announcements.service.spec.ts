@@ -34,6 +34,7 @@ describe('AnnouncementsService', () => {
   // A thenable stand-in for the supabase query builder: every method returns
   // the chain itself and awaiting it resolves to the next queued result.
   function makeChain(table: string) {
+    let single = false;
     const chain = {
       select: vi.fn(),
       eq: vi.fn(),
@@ -44,10 +45,16 @@ describe('AnnouncementsService', () => {
       upsert: vi.fn(),
       insert: vi.fn(),
       // oxlint-disable-next-line no-thenable -- supabase builders are thenable
-      then: (onFulfilled: (value: QueryResult) => unknown) =>
-        Promise.resolve(
-          queues[table]?.shift() ?? { data: null, error: null },
-        ).then(onFulfilled),
+      then: (onFulfilled: (value: QueryResult) => unknown) => {
+        const result = queues[table]?.shift() ?? { data: null, error: null };
+        const tooMany =
+          single && Array.isArray(result.data) && result.data.length > 1;
+        return Promise.resolve(
+          tooMany
+            ? { data: null, error: { message: 'multiple rows returned' } }
+            : result,
+        ).then(onFulfilled);
+      },
     };
     for (const method of [
       'select',
@@ -59,6 +66,10 @@ describe('AnnouncementsService', () => {
     ] as const) {
       chain[method].mockReturnValue(chain);
     }
+    chain.maybeSingle.mockImplementation(() => {
+      single = true;
+      return chain;
+    });
     for (const method of ['upsert', 'insert'] as const) {
       chain[method].mockImplementation((rows: unknown) => {
         writes.push({ table, method, rows });
@@ -185,7 +196,7 @@ describe('AnnouncementsService', () => {
       authAs('teacher-1');
       memberAs('teacher');
       queues.courses = [{ data: { id: 'course-1' }, error: null }];
-      queues.subjects = [{ data: { id: 'subject-1' }, error: null }];
+      queues.subjects = [{ data: [{ id: 'subject-1' }], error: null }];
       queues.announcements = [
         {
           data: announcementRow({ scope: 'course', course_id: 'course-1' }),
@@ -211,11 +222,87 @@ describe('AnnouncementsService', () => {
       });
     });
 
+    it('lets a teacher with two subjects in the course post to it', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      queues.courses = [{ data: { id: 'course-1' }, error: null }];
+      queues.subjects = [
+        { data: [{ id: 'subject-1' }, { id: 'subject-2' }], error: null },
+      ];
+      queues.announcements = [
+        {
+          data: announcementRow({ scope: 'course', course_id: 'course-1' }),
+          error: null,
+        },
+      ];
+
+      await authed(
+        request(app.getHttpServer()).post('/announcements').send({
+          scope: 'course',
+          courseId: 'course-1',
+          title: 'X',
+          body: 'Y',
+        }),
+      ).expect(201);
+    });
+
+    it('lets an admin post to a student enrolled in two courses', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [
+        {
+          data: [{ student_id: 'stu-1' }, { student_id: 'stu-1' }],
+          error: null,
+        },
+      ];
+      queues.announcements = [
+        {
+          data: announcementRow({ scope: 'student', student_id: 'stu-1' }),
+          error: null,
+        },
+      ];
+
+      await authed(
+        request(app.getHttpServer()).post('/announcements').send({
+          scope: 'student',
+          studentId: 'stu-1',
+          title: 'X',
+          body: 'Y',
+        }),
+      ).expect(201);
+    });
+
+    it('answers in Spanish when a guardian tries to post', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .post('/announcements')
+          .send({ scope: 'institution', title: 'X', body: 'Y' }),
+      ).expect(403);
+
+      expect(response.body.message).toBe('No tenés permiso para hacer esto');
+    });
+
+    it('answers in Spanish for a course scope without a course', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .post('/announcements')
+          .send({ scope: 'course', title: 'X', body: 'Y' }),
+      ).expect(400);
+
+      expect(response.body.message).toBe('Falta elegir el curso');
+    });
+
     it('returns 403 for a teacher posting to a course they do not teach', async () => {
       authAs('teacher-1');
       memberAs('teacher');
       queues.courses = [{ data: { id: 'course-1' }, error: null }];
-      queues.subjects = [{ data: null, error: null }];
+      queues.subjects = [{ data: [], error: null }];
 
       await authed(
         request(app.getHttpServer()).post('/announcements').send({
@@ -304,10 +391,12 @@ describe('AnnouncementsService', () => {
       memberAs('director');
       queues.enrollments = [
         {
-          data: {
-            student_id: 'stu-1',
-            courses: { school_id: 'school-1' },
-          },
+          data: [
+            {
+              student_id: 'stu-1',
+              courses: { school_id: 'school-1' },
+            },
+          ],
           error: null,
         },
       ];
@@ -338,7 +427,7 @@ describe('AnnouncementsService', () => {
     it('returns 404 for a student of another institution', async () => {
       authAs('admin-1');
       memberAs('admin');
-      queues.enrollments = [{ data: null, error: null }];
+      queues.enrollments = [{ data: [], error: null }];
 
       await authed(
         request(app.getHttpServer()).post('/announcements').send({
@@ -382,6 +471,38 @@ describe('AnnouncementsService', () => {
         },
       ];
     };
+
+    it('returns the author name and the course label', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.announcements = [
+        {
+          data: [
+            announcementRow({
+              scope: 'course',
+              course_id: 'course-1',
+              profiles: { full_name: 'Laura Gómez' },
+              courses: { year: 1, division: 'A' },
+            }),
+            announcementRow({ id: 'ann-2', profiles: null, courses: null }),
+          ],
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/announcements'),
+      ).expect(200);
+
+      expect(response.body[0]).toMatchObject({
+        authorName: 'Laura Gómez',
+        courseLabel: '1°A',
+      });
+      expect(response.body[1]).toMatchObject({
+        authorName: null,
+        courseLabel: null,
+      });
+    });
 
     it('shows a guardian institution, their kids courses and their kids announcements only', async () => {
       authAs('guardian-1');
