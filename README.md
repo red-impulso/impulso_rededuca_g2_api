@@ -51,8 +51,8 @@ Los endpoints de una institución se protegen con `MembershipGuard` (`@UseGuards
 
 Endpoints para que la escuela cargue y edite sus datos, cursos y materias. Todos requieren `X-Institution-Id` y rol `admin` o `director`.
 
-- `GET /institution` → `{ id, name, address, levels }`.
-- `PATCH /institution` → `{ name?, address?, levels? }` (al menos un campo; `address: null` la borra, `levels` es una lista de textos). Devuelve la institución actualizada.
+- `GET /institution` → `{ id, name, address, levels, code, phone, email, shift, modality }`.
+- `PATCH /institution` → `{ name?, address?, levels?, code?, phone?, email?, shift?, modality? }` (al menos un campo; `address: null` la borra, `levels` es una lista de textos). Devuelve la institución actualizada.
 - `GET /courses` → `[{ id, year, division, shift, schoolYear }]`, ordenados por ciclo lectivo, año y división.
 - `POST /courses` → `{ year, division, shift, schoolYear }`. `shift` es `morning` | `afternoon` | `evening`. Duplicado (mismo año, división, turno y ciclo) → `409`.
 - `PATCH /courses/:id` → mismo payload parcial. Curso de otra institución → `404`; duplicado → `409`.

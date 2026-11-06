@@ -164,6 +164,11 @@ describe('InstitutionService', () => {
         name: 'Escuela Demo',
         address: null,
         levels: [],
+        code: null,
+        phone: null,
+        email: null,
+        shift: null,
+        modality: null,
       });
     });
 
@@ -194,6 +199,83 @@ describe('InstitutionService', () => {
       expect(response.body.message).toBe(
         'El docente indicado no pertenece a la institución',
       );
+    });
+  });
+
+  describe('PATCH /institution with contact data', () => {
+    it('saves code, phone, email, shift and modality, trimmed', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.schools = [
+        {
+          data: {
+            id: 'school-1',
+            name: 'Escuela',
+            address: null,
+            levels: [],
+            code: 'ITSM-001',
+            phone: '388 123 4567',
+            email: 'instituto@rededuca.edu.ar',
+            shift: 'Vespertino',
+            modality: 'Presencial',
+          },
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).patch('/institution').send({
+          code: ' ITSM-001 ',
+          phone: '388 123 4567',
+          email: 'instituto@rededuca.edu.ar',
+          shift: 'Vespertino',
+          modality: 'Presencial',
+        }),
+      ).expect(200);
+
+      expect(writes[0]).toMatchObject({
+        table: 'schools',
+        rows: { code: 'ITSM-001', shift: 'Vespertino' },
+      });
+      expect(response.body.modality).toBe('Presencial');
+    });
+
+    it('an empty value clears the field', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.schools = [
+        { data: { id: 'school-1', name: 'E', phone: null }, error: null },
+      ];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch('/institution')
+          .send({ phone: '  ' }),
+      ).expect(200);
+
+      expect(writes[0]).toMatchObject({ rows: { phone: null } });
+    });
+
+    it('rejects an invalid email', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .patch('/institution')
+          .send({ email: 'sin-arroba' }),
+      ).expect(400);
+
+      expect(response.body.message).toBe('El correo electrónico no es válido');
+    });
+
+    it('rejects a field that is not text', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      await authed(
+        request(app.getHttpServer()).patch('/institution').send({ phone: 123 }),
+      ).expect(400);
     });
   });
 
