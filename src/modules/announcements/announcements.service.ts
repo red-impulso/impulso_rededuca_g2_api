@@ -25,6 +25,7 @@ export interface AnnouncementCreatedPayload {
   scope: AnnouncementScope;
   courseId: string | null;
   studentId: string | null;
+  title: string;
   createdBy: string;
 }
 
@@ -142,6 +143,7 @@ export class AnnouncementsService {
       scope: row.scope,
       courseId: row.course_id,
       studentId: row.student_id,
+      title: row.title,
       createdBy: user.id,
     };
     this.events.emit(ANNOUNCEMENT_CREATED_EVENT, payload);
