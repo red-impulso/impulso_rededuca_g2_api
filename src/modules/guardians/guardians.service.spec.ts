@@ -141,6 +141,56 @@ describe('GuardiansService', () => {
     await app.close();
   });
 
+  describe('GET /guardians', () => {
+    it.each(['admin', 'director'])(
+      'lists the guardians of the institution for %s, by name',
+      async (role) => {
+        authAs('user-1');
+        memberAs(role);
+        queues.memberships.push({
+          data: [
+            guardianMembershipRow({
+              id: 'g-2',
+              profiles: { full_name: 'Zulema Ruiz' },
+            }),
+            guardianMembershipRow({
+              id: 'g-1',
+              profiles: { full_name: 'Ana Díaz' },
+            }),
+          ],
+          error: null,
+        });
+
+        const response = await authed(
+          request(app.getHttpServer()).get('/guardians'),
+        ).expect(200);
+
+        expect(response.body).toEqual([
+          { id: 'g-1', fullName: 'Ana Díaz' },
+          { id: 'g-2', fullName: 'Zulema Ruiz' },
+        ]);
+      },
+    );
+
+    it('returns 500 when the query fails', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push({ data: null, error: { message: 'boom' } });
+
+      await authed(request(app.getHttpServer()).get('/guardians')).expect(500);
+    });
+
+    it.each(['teacher', 'guardian', 'student'])(
+      'returns 403 for the %s role',
+      async (role) => {
+        authAs('user-1');
+        memberAs(role);
+
+        await authed(request(app.getHttpServer()).get('/guardians')).expect(403);
+      },
+    );
+  });
+
   describe('GET /students/:id/guardians', () => {
     it('lists the guardians linked to the student', async () => {
       authAs('admin-1');

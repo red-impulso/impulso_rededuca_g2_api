@@ -61,6 +61,7 @@ Endpoints para que la escuela cargue y edite sus datos, cursos y materias. Todos
 - `POST /subjects` → `{ name, courseId, teacherMembershipId? }` (`teacherMembershipId` es el id de la membresía con rol `teacher` en la institución). Nombre duplicado en el curso → `409`.
 - `PATCH /subjects/:id` → `{ name?, courseId?, teacherMembershipId? }` (`teacherMembershipId: null` desasigna al docente).
 - `DELETE /subjects/:id`.
+- `GET /guardians` (roles `admin`, `director`) → `[{ id, fullName }]`: los tutores de la institución, para vincularlos a un alumno.
 
 ## Correr
 

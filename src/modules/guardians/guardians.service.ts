@@ -40,9 +40,34 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+function toGuardians(rows: MembershipRow[]): GuardianResponse[] {
+  return rows
+    .map((row) => ({
+      id: row.id,
+      fullName: firstRow(row.profiles)?.full_name ?? null,
+    }))
+    .sort((a, b) => (a.fullName ?? '').localeCompare(b.fullName ?? '', 'es'));
+}
+
 @Injectable()
 export class GuardiansService {
   constructor(private readonly supabase: SupabaseService) {}
+
+  // Everyone who can be linked to a student of the institution.
+  async listSchoolGuardians(
+    membership: ActiveMembership,
+  ): Promise<GuardianResponse[]> {
+    const { data, error } = await this.supabase.admin
+      .from('memberships')
+      .select('id, user_id, profiles(full_name)')
+      .eq('school_id', membership.institutionId)
+      .eq('role', 'guardian');
+
+    if (error) {
+      throw new InternalServerErrorException();
+    }
+    return toGuardians((data ?? []) as MembershipRow[]);
+  }
 
   async listGuardians(
     membership: ActiveMembership,
@@ -77,14 +102,7 @@ export class GuardiansService {
       throw new InternalServerErrorException();
     }
 
-    return ((data ?? []) as MembershipRow[])
-      .map((row) => ({
-        id: row.id,
-        fullName: firstRow(row.profiles)?.full_name ?? null,
-      }))
-      .sort((a, b) =>
-        (a.fullName ?? '').localeCompare(b.fullName ?? '', 'es'),
-      );
+    return toGuardians((data ?? []) as MembershipRow[]);
   }
 
   async linkGuardian(
