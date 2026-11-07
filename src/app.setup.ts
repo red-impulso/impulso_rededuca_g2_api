@@ -3,6 +3,9 @@ import type { INestApplication } from '@nestjs/common';
 // Local front-end dev server; always allowed.
 const LOCAL_ORIGIN = 'http://localhost:3000';
 
+// Landing page that posts to the public /leads endpoint.
+const LANDING_ORIGIN = 'https://red-impulso-grupo1.vercel.app';
+
 // CORS_ORIGINS: comma-separated extra origins (the group's Vercel domain),
 // e.g. "https://impulso-rededuca-g2-app.vercel.app".
 export function corsOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -10,7 +13,7 @@ export function corsOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
     .split(',')
     .map((origin) => origin.trim().replace(/\/$/, ''))
     .filter(Boolean);
-  return [LOCAL_ORIGIN, ...extra];
+  return [LOCAL_ORIGIN, LANDING_ORIGIN, ...extra];
 }
 
 // Shared by main.ts and the e2e tests so both run the same configuration.
