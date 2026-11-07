@@ -43,6 +43,20 @@ describe('CORS (e2e)', () => {
     expect(response.headers['access-control-allow-origin']).toBe(VERCEL);
   });
 
+  it('la landing publicada puede mandar postulaciones a /leads', async () => {
+    const landing = 'https://proyecto-red-educa-grupo-2.vercel.app';
+    const response = await request(app.getHttpServer())
+      .options('/leads')
+      .set('Origin', landing)
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'content-type')
+      .expect(204);
+    expect(response.headers['access-control-allow-origin']).toBe(landing);
+    expect(
+      String(response.headers['access-control-allow-headers']).toLowerCase(),
+    ).toContain('content-type');
+  });
+
   it('no permite otros sitios', async () => {
     const response = await request(app.getHttpServer())
       .get('/health')

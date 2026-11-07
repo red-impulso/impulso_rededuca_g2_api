@@ -9,10 +9,15 @@ import { SupabaseService } from '../../supabase/supabase.service.js';
 import type { CreateLeadDto } from './dto/create-lead.dto.js';
 import type { LeadStatus, UpdateLeadDto } from './dto/update-lead.dto.js';
 
-const LEVELS = ['Inicial', 'Primario', 'Secundario', 'Terciario / Superior'];
+const INSTITUTION_TYPES = [
+  'Institución educativa pública',
+  'Institución educativa privada',
+  'Institución de gestión social o cooperativa',
+  'Otra',
+];
 const STATUSES: LeadStatus[] = ['new', 'contacted', 'discarded'];
 const LEAD_COLUMNS =
-  'id, institution_name, contact_name, city, contact_role, level, contact_channel, student_count, comment, status, created_at';
+  'id, institution_name, institution_type, city, student_count, contact_name, phone, email, comment, status, created_at';
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -26,32 +31,45 @@ function isText(value: unknown, maxLength: number): value is string {
   );
 }
 
-// Either a well-formed email or a phone with 8 to 15 digits.
-function isContactChannel(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length > 254) {
+function isEmail(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 254 &&
+    EMAIL_PATTERN.test(value.trim())
+  );
+}
+
+// Digits, spaces, dashes and parentheses, with 8 to 15 digits.
+function isPhone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 30) {
     return false;
   }
-  const channel = value.trim();
-  if (EMAIL_PATTERN.test(channel)) {
-    return true;
+  const phone = value.trim();
+  const digits = phone.replace(/\D/g, '').length;
+  return PHONE_PATTERN.test(phone) && digits >= 8 && digits <= 15;
+}
+
+// The message is optional: missing or blank is saved as null.
+function optionalComment(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) {
+    return null;
   }
-  if (!PHONE_PATTERN.test(channel)) {
-    return false;
+  if (typeof value !== 'string' || value.length > 600) {
+    return undefined;
   }
-  const digits = channel.replace(/\D/g, '').length;
-  return digits >= 8 && digits <= 15;
+  return value.trim() || null;
 }
 
 export interface LeadView {
   id: string;
   institutionName: string;
-  contactName: string;
+  institutionType: string;
   city: string;
-  contactRole: string;
-  level: string;
-  contactChannel: string;
   studentCount: number;
-  comment: string;
+  contactName: string;
+  phone: string;
+  email: string;
+  comment: string | null;
   status: LeadStatus;
   createdAt: string;
 }
@@ -59,13 +77,13 @@ export interface LeadView {
 interface LeadRow {
   id: string;
   institution_name: string;
-  contact_name: string;
+  institution_type: string;
   city: string;
-  contact_role: string;
-  level: string;
-  contact_channel: string;
   student_count: number;
-  comment: string;
+  contact_name: string;
+  phone: string;
+  email: string;
+  comment: string | null;
   status: LeadStatus;
   created_at: string;
 }
@@ -74,12 +92,12 @@ function toView(row: LeadRow): LeadView {
   return {
     id: row.id,
     institutionName: row.institution_name,
-    contactName: row.contact_name,
+    institutionType: row.institution_type,
     city: row.city,
-    contactRole: row.contact_role,
-    level: row.level,
-    contactChannel: row.contact_channel,
     studentCount: row.student_count,
+    contactName: row.contact_name,
+    phone: row.phone,
+    email: row.email,
     comment: row.comment,
     status: row.status,
     createdAt: row.created_at,
@@ -97,19 +115,19 @@ export class LeadsService {
       return { id: randomUUID() };
     }
 
+    const comment = optionalComment(dto?.comment);
     if (
       !dto ||
       !isText(dto.institutionName, 120) ||
-      !isText(dto.contactName, 100) ||
+      !INSTITUTION_TYPES.includes(dto.institutionType) ||
       !isText(dto.city, 100) ||
-      !isText(dto.contactRole, 80) ||
-      !LEVELS.includes(dto.level) ||
-      !isContactChannel(dto.contactChannel) ||
       !Number.isInteger(dto.studentCount) ||
       dto.studentCount < 1 ||
       dto.studentCount > 100000 ||
-      !isText(dto.comment, 600) ||
-      dto.privacyAccepted !== true
+      !isText(dto.contactName, 100) ||
+      !isPhone(dto.phone) ||
+      !isEmail(dto.email) ||
+      comment === undefined
     ) {
       throw new BadRequestException('Revisá los datos del formulario');
     }
@@ -118,14 +136,13 @@ export class LeadsService {
       .from('leads')
       .insert({
         institution_name: dto.institutionName.trim(),
-        contact_name: dto.contactName.trim(),
+        institution_type: dto.institutionType,
         city: dto.city.trim(),
-        contact_role: dto.contactRole.trim(),
-        level: dto.level,
-        contact_channel: dto.contactChannel.trim(),
         student_count: dto.studentCount,
-        comment: dto.comment.trim(),
-        privacy_accepted_at: new Date().toISOString(),
+        contact_name: dto.contactName.trim(),
+        phone: dto.phone.trim(),
+        email: dto.email.trim(),
+        comment,
       })
       .select('id')
       .single();

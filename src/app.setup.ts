@@ -4,7 +4,7 @@ import type { INestApplication } from '@nestjs/common';
 const LOCAL_ORIGIN = 'http://localhost:3000';
 
 // Landing page that posts to the public /leads endpoint.
-const LANDING_ORIGIN = 'https://red-impulso-grupo1.vercel.app';
+const LANDING_ORIGIN = 'https://proyecto-red-educa-grupo-2.vercel.app';
 
 // CORS_ORIGINS: comma-separated extra origins (the group's Vercel domain),
 // e.g. "https://impulso-rededuca-g2-app.vercel.app".
