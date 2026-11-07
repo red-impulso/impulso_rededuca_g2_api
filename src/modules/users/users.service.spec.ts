@@ -45,6 +45,7 @@ describe('UsersService', () => {
       in: vi.fn(),
       or: vi.fn(),
       order: vi.fn(),
+      range: vi.fn(),
       limit: vi.fn(),
       maybeSingle: vi.fn(),
       single: vi.fn(),
@@ -64,6 +65,7 @@ describe('UsersService', () => {
       'in',
       'or',
       'order',
+      'range',
       'limit',
       'maybeSingle',
       'single',
@@ -137,6 +139,31 @@ describe('UsersService', () => {
   });
 
   describe('GET /users', () => {
+    it('lists every member past the 1000 rows of a single query', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      const member = (index: number) => ({
+        id: `m-${index}`,
+        user_id: `user-${index}`,
+        role: 'guardian',
+        status: 'active',
+        profiles: { full_name: `Persona ${index}` },
+      });
+      queues.memberships.push(
+        {
+          data: Array.from({ length: 1000 }, (_, index) => member(index)),
+          error: null,
+        },
+        { data: [member(1000)], error: null },
+      );
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/users'),
+      ).expect(200);
+
+      expect(response.body).toHaveLength(1001);
+    });
+
     it('lists memberships with email, name and role', async () => {
       authAs('admin-1');
       memberAs('admin');

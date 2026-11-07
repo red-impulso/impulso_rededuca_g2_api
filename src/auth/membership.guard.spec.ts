@@ -13,7 +13,8 @@ import { SupabaseModule } from '../supabase/supabase.module.js';
 import { SupabaseService } from '../supabase/supabase.service.js';
 import { AuthGuard } from './auth.guard.js';
 import { CurrentMembership } from './current-membership.decorator.js';
-import { Membership, MembershipGuard } from './membership.guard.js';
+import { MembershipGuard } from './membership.guard.js';
+import type { Membership } from './membership.guard.js';
 import { Roles } from './roles.decorator.js';
 
 @Controller('staff')

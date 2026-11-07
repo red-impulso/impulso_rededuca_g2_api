@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Membership as ActiveMembership } from '../../auth/membership.guard.js';
+import { fetchAllRows } from '../../supabase/fetch-all-rows.js';
 import { SupabaseService } from '../../supabase/supabase.service.js';
 import type {
   CreateStudentDto,
@@ -143,22 +144,23 @@ export class StudentsService {
       await this.loadCourse(membership, query.courseId);
     }
 
-    let builder = this.supabase.admin
-      .from('enrollments')
-      .select(ENROLLMENT_SELECT)
-      .eq('courses.school_id', membership.institutionId);
-    if (query?.courseId) {
-      builder = builder.eq('course_id', query.courseId);
-    }
-
-    const { data, error } = await builder;
+    const { data, error } = await fetchAllRows((from, to) => {
+      let builder = this.supabase.admin
+        .from('enrollments')
+        .select(ENROLLMENT_SELECT)
+        .eq('courses.school_id', membership.institutionId);
+      if (query?.courseId) {
+        builder = builder.eq('course_id', query.courseId);
+      }
+      return builder.order('student_id').order('course_id').range(from, to);
+    });
     if (error) {
       throw new InternalServerErrorException();
     }
 
     // One row per enrollment; a student enrolled twice keeps the latest one.
     const byStudent = new Map<string, StudentResponse>();
-    const rows = (data ?? []) as EnrollmentRow[];
+    const rows = data as EnrollmentRow[];
     rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
     for (const row of rows) {
       if (byStudent.has(row.student_id)) {

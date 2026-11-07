@@ -72,6 +72,7 @@ describe('StudentsService', () => {
       in: vi.fn(),
       or: vi.fn(),
       order: vi.fn(),
+      range: vi.fn(),
       limit: vi.fn(),
       maybeSingle: vi.fn(),
       single: vi.fn(),
@@ -92,6 +93,7 @@ describe('StudentsService', () => {
       'in',
       'or',
       'order',
+      'range',
       'limit',
       'maybeSingle',
       'single',
@@ -225,6 +227,29 @@ describe('StudentsService', () => {
       expect(response.body.map((s: { firstName: string }) => s.firstName)).toEqual([
         found,
       ]);
+    });
+
+    it('lists every student past the 1000 rows of a single query', async () => {
+      authAs('user-1');
+      memberAs('admin');
+      const enrollment = (index: number) =>
+        enrollmentRow({
+          student_id: `student-${index}`,
+          profiles: profileRow({ id: `student-${index}` }),
+        });
+      queues.enrollments = [
+        {
+          data: Array.from({ length: 1000 }, (_, index) => enrollment(index)),
+          error: null,
+        },
+        { data: [enrollment(1000)], error: null },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/students'),
+      ).expect(200);
+
+      expect(response.body).toHaveLength(1001);
     });
 
     it('lists a student without personal data with a null DNI', async () => {

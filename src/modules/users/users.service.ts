@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Membership as ActiveMembership } from '../../auth/membership.guard.js';
+import { fetchAllRows } from '../../supabase/fetch-all-rows.js';
 import { SupabaseService } from '../../supabase/supabase.service.js';
 import type {
   CreateUserDto,
@@ -96,17 +97,21 @@ export class UsersService {
   constructor(private readonly supabase: SupabaseService) {}
 
   async listUsers(membership: ActiveMembership): Promise<UserResponse[]> {
-    const { data, error } = await this.supabase.admin
-      .from('memberships')
-      .select('id, user_id, role, status, profiles(full_name)')
-      .eq('school_id', membership.institutionId);
+    const { data, error } = await fetchAllRows((from, to) =>
+      this.supabase.admin
+        .from('memberships')
+        .select('id, user_id, role, status, profiles(full_name)')
+        .eq('school_id', membership.institutionId)
+        .order('id')
+        .range(from, to),
+    );
 
     if (error) {
       throw new InternalServerErrorException();
     }
 
     const emailById = await this.emailMap();
-    return ((data ?? []) as MembershipRow[])
+    return (data as MembershipRow[])
       .map((row) => ({
         id: row.id,
         userId: row.user_id,
