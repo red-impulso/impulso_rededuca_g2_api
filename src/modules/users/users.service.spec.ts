@@ -146,6 +146,7 @@ describe('UsersService', () => {
             id: MEMBERSHIP_ID,
             user_id: 'user-1',
             role: 'teacher',
+            status: 'inactive',
             profiles: { full_name: 'Laura Gómez' },
           },
         ],
@@ -167,8 +168,47 @@ describe('UsersService', () => {
           email: 'laura@demo.rededuca',
           fullName: 'Laura Gómez',
           role: 'teacher',
+          status: 'inactive',
         },
       ]);
+    });
+
+    it('reads every page of auth users to find the emails', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push({
+        data: [
+          {
+            id: MEMBERSHIP_ID,
+            user_id: 'user-1001',
+            role: 'teacher',
+            status: 'active',
+            profiles: { full_name: 'Laura Gómez' },
+          },
+        ],
+        error: null,
+      });
+      listUsers
+        .mockResolvedValueOnce({
+          data: {
+            users: Array.from({ length: 1000 }, (_, i) => ({
+              id: `user-${i}`,
+              email: `u${i}@demo.rededuca`,
+            })),
+          },
+          error: null,
+        })
+        .mockResolvedValueOnce({
+          data: { users: [{ id: 'user-1001', email: 'laura@demo.rededuca' }] },
+          error: null,
+        });
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/users'),
+      ).expect(200);
+
+      expect(response.body[0].email).toBe('laura@demo.rededuca');
+      expect(listUsers).toHaveBeenCalledTimes(2);
     });
 
     it.each(['director', 'teacher', 'guardian'])(
@@ -369,6 +409,113 @@ describe('UsersService', () => {
       ).expect(200);
     });
 
+    it('deactivates a user without changing the role', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push(
+        {
+          data: { id: MEMBERSHIP_ID, user_id: 'user-1', role: 'teacher', status: 'active' },
+          error: null,
+        },
+        { data: null, error: null },
+        {
+          data: {
+            id: MEMBERSHIP_ID,
+            user_id: 'user-1',
+            role: 'teacher',
+            status: 'inactive',
+            profiles: { full_name: 'Laura Gómez' },
+          },
+          error: null,
+        },
+      );
+      listUsers.mockResolvedValue({ data: { users: [] }, error: null });
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .patch(`/memberships/${MEMBERSHIP_ID}`)
+          .send({ status: 'inactive' }),
+      ).expect(200);
+
+      expect(writes[0]).toMatchObject({
+        table: 'memberships',
+        rows: { status: 'inactive' },
+      });
+      expect(writes[0].rows).not.toHaveProperty('role');
+      expect(response.body).toMatchObject({ role: 'teacher', status: 'inactive' });
+    });
+
+    it('changes the name shown for the user', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push(
+        {
+          data: { id: MEMBERSHIP_ID, user_id: 'user-1', role: 'teacher', status: 'active' },
+          error: null,
+        },
+        {
+          data: {
+            id: MEMBERSHIP_ID,
+            user_id: 'user-1',
+            role: 'teacher',
+            status: 'active',
+            profiles: { full_name: 'Laura Prueba' },
+          },
+          error: null,
+        },
+      );
+      listUsers.mockResolvedValue({ data: { users: [] }, error: null });
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .patch(`/memberships/${MEMBERSHIP_ID}`)
+          .send({ fullName: ' Laura Prueba ' }),
+      ).expect(200);
+
+      expect(writes[0]).toMatchObject({
+        table: 'profiles',
+        rows: { full_name: 'Laura Prueba' },
+      });
+      expect(response.body.fullName).toBe('Laura Prueba');
+    });
+
+    it('returns 409 when deactivating the last admin', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push(
+        {
+          data: { id: MEMBERSHIP_ID, user_id: 'admin-1', role: 'admin', status: 'active' },
+          error: null,
+        },
+        { data: [], error: null },
+      );
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/memberships/${MEMBERSHIP_ID}`)
+          .send({ status: 'inactive' }),
+      ).expect(409);
+      expect(writes).toHaveLength(0);
+    });
+
+    it('returns 400 for an unknown status or an empty body', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/memberships/${MEMBERSHIP_ID}`)
+          .send({ status: 'deleted' }),
+      ).expect(400);
+
+      memberAs('admin');
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/memberships/${MEMBERSHIP_ID}`)
+          .send({}),
+      ).expect(400);
+    });
+
     it('returns 404 for a membership of another institution', async () => {
       authAs('admin-1');
       memberAs('admin');
@@ -404,6 +551,51 @@ describe('UsersService', () => {
         table: 'memberships',
         method: 'delete',
       });
+    });
+
+    it('removes the personal data when no role is left in the school', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push(
+        {
+          data: { id: MEMBERSHIP_ID, user_id: 'user-1', role: 'teacher' },
+          error: null,
+        },
+        { data: null, error: null },
+        { data: [], error: null },
+      );
+
+      await authed(
+        request(app.getHttpServer()).delete(
+          `/memberships/${MEMBERSHIP_ID}`,
+        ),
+      ).expect(200);
+
+      expect(writes.map((write) => write.table)).toEqual([
+        'memberships',
+        'member_details',
+      ]);
+    });
+
+    it('keeps the personal data when another role remains in the school', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push(
+        {
+          data: { id: MEMBERSHIP_ID, user_id: 'user-1', role: 'teacher' },
+          error: null,
+        },
+        { data: null, error: null },
+        { data: [{ id: 'other-role' }], error: null },
+      );
+
+      await authed(
+        request(app.getHttpServer()).delete(
+          `/memberships/${MEMBERSHIP_ID}`,
+        ),
+      ).expect(200);
+
+      expect(writes.map((write) => write.table)).toEqual(['memberships']);
     });
 
     it('returns 409 when deleting the last admin', async () => {

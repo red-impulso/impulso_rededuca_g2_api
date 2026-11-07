@@ -16,7 +16,7 @@ interface QueryResult {
 
 interface WriteCall {
   table: string;
-  method: 'insert' | 'update';
+  method: 'insert' | 'update' | 'upsert';
   rows: unknown;
 }
 
@@ -28,6 +28,8 @@ describe('TeachersService', () => {
   let app: INestApplication<App>;
 
   const getUser = vi.fn();
+  const getUserById = vi.fn();
+  const createUser = vi.fn();
   // Each table keeps a FIFO queue of results; every awaited query consumes one.
   let queues: Record<string, QueryResult[]>;
   let writes: WriteCall[];
@@ -38,6 +40,7 @@ describe('TeachersService', () => {
     const chain = {
       select: vi.fn(),
       eq: vi.fn(),
+      neq: vi.fn(),
       in: vi.fn(),
       order: vi.fn(),
       limit: vi.fn(),
@@ -45,6 +48,7 @@ describe('TeachersService', () => {
       single: vi.fn(),
       insert: vi.fn(),
       update: vi.fn(),
+      upsert: vi.fn(),
       delete: vi.fn(),
       // oxlint-disable-next-line no-thenable -- supabase builders are thenable
       then: (onFulfilled: (value: QueryResult) => unknown) =>
@@ -55,6 +59,7 @@ describe('TeachersService', () => {
     for (const method of [
       'select',
       'eq',
+      'neq',
       'in',
       'order',
       'limit',
@@ -64,7 +69,7 @@ describe('TeachersService', () => {
     ] as const) {
       chain[method].mockReturnValue(chain);
     }
-    for (const method of ['insert', 'update'] as const) {
+    for (const method of ['insert', 'update', 'upsert'] as const) {
       chain[method].mockImplementation((rows: unknown) => {
         writes.push({ table, method, rows });
         return chain;
@@ -77,7 +82,7 @@ describe('TeachersService', () => {
 
   const supabase = {
     admin: {
-      auth: { getUser },
+      auth: { getUser, admin: { getUserById, createUser } },
       from,
     },
   };
@@ -106,6 +111,14 @@ describe('TeachersService', () => {
     vi.clearAllMocks();
     queues = {};
     writes = [];
+    getUserById.mockResolvedValue({
+      data: { user: { email: 'laura@demo.rededuca' } },
+      error: null,
+    });
+    createUser.mockResolvedValue({
+      data: { user: { id: 'new-user' } },
+      error: null,
+    });
     const module: TestingModule = await Test.createTestingModule({
       imports: [SupabaseModule, TeachersModule],
       providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
@@ -155,6 +168,13 @@ describe('TeachersService', () => {
         },
       ];
 
+      queues.member_details = [
+        {
+          data: [{ user_id: 'teacher-user-1', dni: '30111222' }],
+          error: null,
+        },
+      ];
+
       const response = await authed(
         request(app.getHttpServer()).get('/teachers'),
       ).expect(200);
@@ -163,6 +183,8 @@ describe('TeachersService', () => {
         {
           id: TEACHER_MEMBERSHIP_ID,
           fullName: 'Laura Gómez',
+          status: 'active',
+          dni: '30111222',
           subjects: [
             {
               id: SUBJECT_ID,
@@ -196,6 +218,215 @@ describe('TeachersService', () => {
       memberAs(role);
 
       await authed(request(app.getHttpServer()).get('/teachers')).expect(403);
+    });
+  });
+
+  describe('GET /teachers/:id', () => {
+    const teacherRow = {
+      id: TEACHER_MEMBERSHIP_ID,
+      user_id: 'teacher-user-1',
+      role: 'teacher',
+      status: 'active',
+      profiles: { full_name: 'Laura Gómez' },
+    };
+
+    it('returns the teacher file with subjects and personal data', async () => {
+      authAs('admin-1');
+      memberAs('director');
+      queues.memberships.push({ data: teacherRow, error: null });
+      queues.member_details = [
+        {
+          data: {
+            dni: '30111222',
+            phone: '388 000 0000',
+            training: 'Prof. en Matemática',
+            start_year: 2020,
+            notes: null,
+          },
+          error: null,
+        },
+      ];
+      queues.subjects = [
+        {
+          data: [
+            {
+              id: SUBJECT_ID,
+              name: 'Matemática',
+              teacher_id: 'teacher-user-1',
+              courses: { id: 'c1', year: 1, division: 'A', shift: 'morning' },
+            },
+          ],
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get(`/teachers/${TEACHER_MEMBERSHIP_ID}`),
+      ).expect(200);
+
+      expect(response.body).toEqual({
+        id: TEACHER_MEMBERSHIP_ID,
+        fullName: 'Laura Gómez',
+        status: 'active',
+        dni: '30111222',
+        email: 'laura@demo.rededuca',
+        phone: '388 000 0000',
+        training: 'Prof. en Matemática',
+        startYear: 2020,
+        notes: null,
+        subjects: [
+          {
+            id: SUBJECT_ID,
+            name: 'Matemática',
+            course: { id: 'c1', year: 1, division: 'A', shift: 'morning' },
+          },
+        ],
+      });
+    });
+
+    it('returns 404 when the membership is not a teacher', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push({
+        data: { ...teacherRow, role: 'guardian' },
+        error: null,
+      });
+
+      await authed(
+        request(app.getHttpServer()).get(`/teachers/${TEACHER_MEMBERSHIP_ID}`),
+      ).expect(404);
+    });
+
+    it('returns 403 for a teacher', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+
+      await authed(
+        request(app.getHttpServer()).get(`/teachers/${TEACHER_MEMBERSHIP_ID}`),
+      ).expect(403);
+    });
+  });
+
+  describe('POST /teachers', () => {
+    const payload = {
+      fullName: 'Pablo Ejemplo',
+      email: 'pablo@demo.rededuca',
+      temporaryPassword: 'clave-de-prueba',
+      dni: '30999888',
+      training: 'Prof. de Historia',
+      startYear: 2021,
+    };
+
+    it('creates the user as a teacher and saves the personal data', async () => {
+      authAs('admin-1');
+      memberAs('director');
+      queues.member_details = [{ data: [], error: null }];
+      queues.profiles = [{ data: null, error: null }];
+      queues.memberships.push({ data: { id: 'new-membership' }, error: null });
+
+      const response = await authed(
+        request(app.getHttpServer()).post('/teachers').send(payload),
+      ).expect(201);
+
+      expect(response.body).toMatchObject({ id: 'new-membership' });
+      expect(writes.find((w) => w.table === 'memberships')?.rows).toMatchObject({
+        role: 'teacher',
+      });
+      expect(writes.find((w) => w.table === 'member_details')).toMatchObject({
+        method: 'upsert',
+        rows: {
+          user_id: 'new-user',
+          school_id: 'school-1',
+          dni: '30999888',
+          training: 'Prof. de Historia',
+          start_year: 2021,
+        },
+      });
+    });
+
+    it('returns 409 before creating anyone when the DNI is taken', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.member_details = [{ data: [{ user_id: 'other' }], error: null }];
+
+      await authed(
+        request(app.getHttpServer()).post('/teachers').send(payload),
+      ).expect(409);
+      expect(createUser).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for an invalid start year', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      await authed(
+        request(app.getHttpServer())
+          .post('/teachers')
+          .send({ ...payload, startYear: 1800 }),
+      ).expect(400);
+      expect(createUser).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PATCH /teachers/:id', () => {
+    const teacherRow = {
+      id: TEACHER_MEMBERSHIP_ID,
+      user_id: 'teacher-user-1',
+      role: 'teacher',
+      status: 'active',
+      profiles: { full_name: 'Laura Gómez' },
+    };
+
+    it('saves personal data, name and status', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push(
+        { data: teacherRow, error: null },
+        { data: null, error: null },
+        { data: { ...teacherRow, status: 'inactive' }, error: null },
+      );
+      queues.member_details = [
+        { data: [], error: null },
+        { data: null, error: null },
+        { data: { dni: '30111222' }, error: null },
+      ];
+      queues.subjects = [{ data: [], error: null }];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .patch(`/teachers/${TEACHER_MEMBERSHIP_ID}`)
+          .send({
+            fullName: ' Laura Prueba ',
+            dni: '30111222',
+            notes: '  ',
+            status: 'inactive',
+          }),
+      ).expect(200);
+
+      expect(writes.find((w) => w.table === 'profiles')?.rows).toEqual({
+        full_name: 'Laura Prueba',
+      });
+      expect(writes.find((w) => w.table === 'memberships')?.rows).toEqual({
+        status: 'inactive',
+      });
+      expect(writes.find((w) => w.table === 'member_details')?.rows).toMatchObject({
+        user_id: 'teacher-user-1',
+        dni: '30111222',
+        notes: null,
+      });
+      expect(response.body.status).toBe('inactive');
+    });
+
+    it('returns 400 when there is nothing to save', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.memberships.push({ data: teacherRow, error: null });
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/teachers/${TEACHER_MEMBERSHIP_ID}`)
+          .send({}),
+      ).expect(400);
     });
   });
 

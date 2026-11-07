@@ -18,6 +18,8 @@ const UUID_RE =
 // Roles a user can be given through this module. Students are enrolled via
 // POST /students, not here.
 const ASSIGNABLE_ROLES = ['admin', 'director', 'teacher', 'guardian'];
+const STATUSES = ['active', 'inactive'];
+const AUTH_PAGE_SIZE = 1000;
 
 // profiles.role is a legacy column whose check constraint predates
 // 'director' and 'guardian'; they are stored as 'student' there.
@@ -35,16 +37,38 @@ export interface UserResponse {
   email: string | null;
   fullName: string | null;
   role: string;
+  status: string;
+}
+
+// Columns of member_details, already validated by whoever calls saveDetails.
+export interface MemberDetails {
+  dni?: string | null;
+  phone?: string | null;
+  training?: string | null;
+  start_year?: number | null;
+  notes?: string | null;
 }
 
 interface MembershipRow {
   id: string;
   user_id: string;
   role: string;
+  status?: string;
   profiles:
     | { full_name: string | null }
     | { full_name: string | null }[]
     | null;
+}
+
+interface TargetMembership {
+  id: string;
+  user_id: string;
+  role: string;
+  status?: string;
+}
+
+function isActiveAdmin(target: TargetMembership): boolean {
+  return target.role === 'admin' && target.status !== 'inactive';
 }
 
 function firstRow<T>(value: T | T[] | null | undefined): T | undefined {
@@ -74,7 +98,7 @@ export class UsersService {
   async listUsers(membership: ActiveMembership): Promise<UserResponse[]> {
     const { data, error } = await this.supabase.admin
       .from('memberships')
-      .select('id, user_id, role, profiles(full_name)')
+      .select('id, user_id, role, status, profiles(full_name)')
       .eq('school_id', membership.institutionId);
 
     if (error) {
@@ -89,6 +113,7 @@ export class UsersService {
         email: emailById.get(row.user_id) ?? null,
         fullName: firstRow(row.profiles)?.full_name ?? null,
         role: row.role,
+        status: row.status ?? 'active',
       }))
       .sort((a, b) =>
         (a.fullName ?? '').localeCompare(b.fullName ?? '', 'es'),
@@ -161,6 +186,7 @@ export class UsersService {
       email,
       fullName,
       role: dto.role,
+      status: 'active',
     };
   }
 
@@ -169,34 +195,56 @@ export class UsersService {
     membershipId: string,
     dto: UpdateMembershipDto | undefined,
   ): Promise<UserResponse> {
-    const role = dto?.role;
+    const { role, status, fullName } = dto ?? {};
+    if (role === undefined && status === undefined && fullName === undefined) {
+      throw new BadRequestException('No hay cambios para guardar');
+    }
     if (
-      !ASSIGNABLE_ROLES.includes(
-        role as (typeof ASSIGNABLE_ROLES)[number],
-      ) &&
+      role !== undefined &&
+      !ASSIGNABLE_ROLES.includes(role) &&
       role !== 'student'
     ) {
       throw new BadRequestException('El rol indicado no es válido');
     }
+    if (status !== undefined && !STATUSES.includes(status)) {
+      throw new BadRequestException('El estado indicado no es válido');
+    }
+    if (
+      fullName !== undefined &&
+      (typeof fullName !== 'string' || !fullName.trim())
+    ) {
+      throw new BadRequestException('El usuario necesita un nombre');
+    }
 
     const target = await this.loadMembership(membership, membershipId);
-    if (target.role === 'admin' && role !== 'admin') {
+    const nextRole = role ?? target.role;
+    const nextStatus = status ?? target.status ?? 'active';
+    const stopsBeingAdmin = nextRole !== 'admin' || nextStatus === 'inactive';
+    if (isActiveAdmin(target) && stopsBeingAdmin) {
       await this.assertOtherAdmins(membership, target);
     }
 
-    const { error } = await this.supabase.admin
-      .from('memberships')
-      .update({ role })
-      .eq('id', membershipId);
+    if (fullName !== undefined) {
+      await this.saveName(target.user_id, fullName.trim());
+    }
+    if (role !== undefined || status !== undefined) {
+      const { error } = await this.supabase.admin
+        .from('memberships')
+        .update({
+          ...(role !== undefined && { role }),
+          ...(status !== undefined && { status }),
+        })
+        .eq('id', membershipId);
 
-    if (error) {
-      throw new InternalServerErrorException();
+      if (error) {
+        throw new InternalServerErrorException();
+      }
     }
 
     const emailById = await this.emailMap();
     const { data: refreshed } = await this.supabase.admin
       .from('memberships')
-      .select('id, user_id, role, profiles(full_name)')
+      .select('id, user_id, role, status, profiles(full_name)')
       .eq('id', membershipId)
       .maybeSingle();
     const row = refreshed as MembershipRow | null;
@@ -205,8 +253,44 @@ export class UsersService {
       userId: row?.user_id ?? target.user_id,
       email: emailById.get(row?.user_id ?? target.user_id) ?? null,
       fullName: firstRow(row?.profiles)?.full_name ?? null,
-      role: role as string,
+      role: nextRole,
+      status: nextStatus,
     };
+  }
+
+  async saveName(userId: string, fullName: string): Promise<void> {
+    const { error } = await this.supabase.admin
+      .from('profiles')
+      .update({ full_name: fullName })
+      .eq('id', userId);
+
+    if (error) {
+      throw new InternalServerErrorException();
+    }
+  }
+
+  // Only the columns received change: the upsert leaves the others as they are.
+  async saveDetails(
+    membership: ActiveMembership,
+    userId: string,
+    details: MemberDetails,
+  ): Promise<void> {
+    const { error } = await this.supabase.admin.from('member_details').upsert(
+      {
+        user_id: userId,
+        school_id: membership.institutionId,
+        ...details,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,school_id' },
+    );
+
+    if (isUniqueViolation(error)) {
+      throw new ConflictException('Ya existe una persona con ese DNI');
+    }
+    if (error) {
+      throw new InternalServerErrorException();
+    }
   }
 
   async deleteMembership(
@@ -214,7 +298,7 @@ export class UsersService {
     membershipId: string,
   ): Promise<{ deleted: true }> {
     const target = await this.loadMembership(membership, membershipId);
-    if (target.role === 'admin') {
+    if (isActiveAdmin(target)) {
       await this.assertOtherAdmins(membership, target);
     }
 
@@ -226,19 +310,50 @@ export class UsersService {
     if (error) {
       throw new InternalServerErrorException();
     }
+
+    await this.forgetDetails(membership, target.user_id);
     return { deleted: true };
+  }
+
+  // Whoever has no role left in the school takes their personal data along.
+  private async forgetDetails(
+    membership: ActiveMembership,
+    userId: string,
+  ): Promise<void> {
+    const { data, error } = await this.supabase.admin
+      .from('memberships')
+      .select('id')
+      .eq('school_id', membership.institutionId)
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new InternalServerErrorException();
+    }
+    if (data?.length) {
+      return;
+    }
+
+    const { error: deleteError } = await this.supabase.admin
+      .from('member_details')
+      .delete()
+      .eq('school_id', membership.institutionId)
+      .eq('user_id', userId);
+
+    if (deleteError) {
+      throw new InternalServerErrorException();
+    }
   }
 
   private async loadMembership(
     membership: ActiveMembership,
     membershipId: string,
-  ): Promise<{ id: string; user_id: string; role: string }> {
+  ): Promise<TargetMembership> {
     if (!UUID_RE.test(membershipId)) {
       throw new NotFoundException('No se encontró la membresía');
     }
     const { data, error } = await this.supabase.admin
       .from('memberships')
-      .select('id, user_id, role')
+      .select('id, user_id, role, status')
       .eq('id', membershipId)
       .eq('school_id', membership.institutionId)
       .maybeSingle();
@@ -249,11 +364,11 @@ export class UsersService {
     if (!data) {
       throw new NotFoundException('No se encontró la membresía');
     }
-    return data as { id: string; user_id: string; role: string };
+    return data as TargetMembership;
   }
 
-  // The institution must always keep at least one admin; demoting or
-  // deleting the last one is refused.
+  // The institution must always keep at least one active admin; demoting,
+  // deactivating or deleting the last one is refused.
   private async assertOtherAdmins(
     membership: ActiveMembership,
     target: { id: string },
@@ -263,6 +378,7 @@ export class UsersService {
       .select('id')
       .eq('school_id', membership.institutionId)
       .eq('role', 'admin')
+      .eq('status', 'active')
       .neq('id', target.id);
 
     if (error) {
@@ -337,21 +453,27 @@ export class UsersService {
     }
   }
 
-  // One listUsers page is enough for school-sized user bases and avoids an
-  // auth lookup per membership row.
+  // Auth users are shared by every school, so the list is read page by page
+  // instead of doing an auth lookup per membership row.
   private async emailMap(): Promise<Map<string, string>> {
     const map = new Map<string, string>();
-    const { data, error } = await this.supabase.admin.auth.admin.listUsers({
-      perPage: 1000,
-    });
-    if (error) {
-      throw new InternalServerErrorException();
-    }
-    for (const u of (data?.users ?? []) as { id: string; email?: string }[]) {
-      if (u.email) {
-        map.set(u.id, u.email);
+    for (let page = 1; ; page += 1) {
+      const { data, error } = await this.supabase.admin.auth.admin.listUsers({
+        page,
+        perPage: AUTH_PAGE_SIZE,
+      });
+      if (error) {
+        throw new InternalServerErrorException();
+      }
+      const users = (data?.users ?? []) as { id: string; email?: string }[];
+      for (const u of users) {
+        if (u.email) {
+          map.set(u.id, u.email);
+        }
+      }
+      if (users.length < AUTH_PAGE_SIZE) {
+        return map;
       }
     }
-    return map;
   }
 }

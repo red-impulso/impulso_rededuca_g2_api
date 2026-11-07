@@ -206,6 +206,41 @@ describe('MeController', () => {
     ]);
   });
 
+  it('leaves out the institutions where the user is inactive', async () => {
+    authAs('user-1');
+    results.profiles = { data: { id: 'user-1', full_name: 'Ana' }, error: null };
+    results.memberships = {
+      data: [
+        {
+          id: 'm-1',
+          school_id: 'school-1',
+          role: 'teacher',
+          status: 'inactive',
+          schools: { id: 'school-1', name: 'Escuela N°1' },
+        },
+        {
+          id: 'm-2',
+          school_id: 'school-2',
+          role: 'admin',
+          status: 'active',
+          schools: { id: 'school-2', name: 'Escuela N°2' },
+        },
+      ],
+      error: null,
+    };
+
+    const response = await request(app.getHttpServer())
+      .get('/me')
+      .set('Authorization', 'Bearer valid-token')
+      .expect(200);
+
+    expect(
+      response.body.memberships.map(
+        (m: { institutionId: string }) => m.institutionId,
+      ),
+    ).toEqual(['school-2']);
+  });
+
   it('returns empty memberships when the user has no school', async () => {
     authAs('user-2', { email: 'bob@example.com' });
     results.profiles = {
