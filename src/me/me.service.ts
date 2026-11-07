@@ -39,6 +39,7 @@ interface MembershipRow {
   id: string;
   school_id: string;
   role: string;
+  status?: string;
   schools: { id: string; name: string } | { id: string; name: string }[] | null;
 }
 
@@ -83,7 +84,7 @@ export class MeService {
         .maybeSingle(),
       this.supabase.admin
         .from('memberships')
-        .select('id, school_id, role, schools(id, name)')
+        .select('id, school_id, role, status, schools(id, name)')
         .eq('user_id', user.id),
     ]);
 
@@ -97,7 +98,7 @@ export class MeService {
         const school = Array.isArray(row.schools)
           ? row.schools[0]
           : row.schools;
-        return school
+        return school && row.status !== 'inactive'
           ? [
               {
                 id: row.id,

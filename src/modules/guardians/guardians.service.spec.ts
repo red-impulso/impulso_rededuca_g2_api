@@ -18,7 +18,7 @@ interface QueryResult {
 
 interface WriteCall {
   table: string;
-  method: 'insert' | 'update' | 'delete';
+  method: 'insert' | 'update' | 'upsert' | 'delete';
   rows: unknown;
 }
 
@@ -43,6 +43,7 @@ describe('GuardiansService', () => {
   let app: INestApplication<App>;
 
   const getUser = vi.fn();
+  const getUserById = vi.fn();
   // Each table keeps a FIFO queue of results; every awaited query consumes one.
   let queues: Record<string, QueryResult[]>;
   let writes: WriteCall[];
@@ -60,6 +61,7 @@ describe('GuardiansService', () => {
       single: vi.fn(),
       insert: vi.fn(),
       update: vi.fn(),
+      upsert: vi.fn(),
       delete: vi.fn(),
       // oxlint-disable-next-line no-thenable -- supabase builders are thenable
       then: (onFulfilled: (value: QueryResult) => unknown) =>
@@ -78,7 +80,7 @@ describe('GuardiansService', () => {
     ] as const) {
       chain[method].mockReturnValue(chain);
     }
-    for (const method of ['insert', 'update', 'delete'] as const) {
+    for (const method of ['insert', 'update', 'upsert', 'delete'] as const) {
       chain[method].mockImplementation((rows: unknown) => {
         writes.push({ table, method, rows });
         return chain;
@@ -91,7 +93,7 @@ describe('GuardiansService', () => {
 
   const supabase = {
     admin: {
-      auth: { getUser },
+      auth: { getUser, admin: { getUserById } },
       from,
     },
   };
@@ -120,6 +122,10 @@ describe('GuardiansService', () => {
     vi.clearAllMocks();
     queues = {};
     writes = [];
+    getUserById.mockResolvedValue({
+      data: { user: { email: 'maria@demo.rededuca' } },
+      error: null,
+    });
     const module: TestingModule = await Test.createTestingModule({
       imports: [
         EventEmitterModule.forRoot(),
@@ -197,19 +203,34 @@ describe('GuardiansService', () => {
       memberAs('admin');
       queues.enrollments = [{ data: [enrolledRow()], error: null }];
       queues.guardian_links = [
-        { data: [{ guardian_id: 'guardian-user-1' }], error: null },
+        {
+          data: [{ guardian_id: 'guardian-user-1', relationship: 'madre' }],
+          error: null,
+        },
       ];
       queues.memberships.push({
         data: [guardianMembershipRow()],
         error: null,
       });
+      queues.member_details = [
+        {
+          data: [{ user_id: 'guardian-user-1', phone: '388 000 0000' }],
+          error: null,
+        },
+      ];
 
       const response = await authed(
         request(app.getHttpServer()).get(`/students/${STUDENT_ID}/guardians`),
       ).expect(200);
 
       expect(response.body).toEqual([
-        { id: GUARDIAN_MEMBERSHIP_ID, fullName: 'María Fernández' },
+        {
+          id: GUARDIAN_MEMBERSHIP_ID,
+          fullName: 'María Fernández',
+          relationship: 'madre',
+          phone: '388 000 0000',
+          email: 'maria@demo.rededuca',
+        },
       ]);
     });
 
@@ -272,6 +293,32 @@ describe('GuardiansService', () => {
         id: GUARDIAN_MEMBERSHIP_ID,
         fullName: 'María Fernández',
       });
+    });
+
+    it('saves the relationship and phone with the link', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [{ data: [enrolledRow()], error: null }];
+      queues.memberships.push({ data: guardianMembershipRow(), error: null });
+      queues.guardian_links = [{ data: null, error: null }];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .post(`/students/${STUDENT_ID}/guardians`)
+          .send({
+            guardianMembershipId: GUARDIAN_MEMBERSHIP_ID,
+            relationship: 'madre',
+            phone: '388 000 0000',
+          }),
+      ).expect(201);
+
+      expect(writes.find((w) => w.table === 'guardian_links')?.rows).toMatchObject({
+        relationship: 'madre',
+      });
+      expect(writes.find((w) => w.table === 'member_details')?.rows).toMatchObject({
+        phone: '388 000 0000',
+      });
+      expect(response.body).toMatchObject({ relationship: 'madre' });
     });
 
     it('returns 409 when the guardian is already linked', async () => {
@@ -352,6 +399,64 @@ describe('GuardiansService', () => {
         request(app.getHttpServer())
           .post(`/students/${STUDENT_ID}/guardians`)
           .send({ guardianMembershipId: GUARDIAN_MEMBERSHIP_ID }),
+      ).expect(404);
+    });
+  });
+
+  describe('PATCH /students/:id/guardians/:guardianMembershipId', () => {
+    const ruta = `/students/${STUDENT_ID}/guardians/${GUARDIAN_MEMBERSHIP_ID}`;
+
+    it('updates the relationship and the phone', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [{ data: [enrolledRow()], error: null }];
+      queues.memberships.push({ data: guardianMembershipRow(), error: null });
+      queues.guardian_links = [
+        { data: [{ guardian_id: 'guardian-user-1' }], error: null },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .patch(ruta)
+          .send({ relationship: 'padre', phone: ' 388 111 1111 ' }),
+      ).expect(200);
+
+      expect(writes.find((w) => w.table === 'guardian_links')?.rows).toEqual({
+        relationship: 'padre',
+      });
+      expect(writes.find((w) => w.table === 'member_details')).toMatchObject({
+        method: 'upsert',
+        rows: {
+          user_id: 'guardian-user-1',
+          school_id: 'school-1',
+          phone: '388 111 1111',
+        },
+      });
+      expect(response.body).toMatchObject({
+        id: GUARDIAN_MEMBERSHIP_ID,
+        relationship: 'padre',
+        phone: '388 111 1111',
+      });
+    });
+
+    it('returns 400 for an unknown relationship', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      await authed(
+        request(app.getHttpServer()).patch(ruta).send({ relationship: 'vecino' }),
+      ).expect(400);
+    });
+
+    it('returns 404 when the guardian is not linked to the student', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [{ data: [enrolledRow()], error: null }];
+      queues.memberships.push({ data: guardianMembershipRow(), error: null });
+      queues.guardian_links = [{ data: [], error: null }];
+
+      await authed(
+        request(app.getHttpServer()).patch(ruta).send({ relationship: 'padre' }),
       ).expect(404);
     });
   });

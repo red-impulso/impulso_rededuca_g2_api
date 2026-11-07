@@ -6,5 +6,7 @@ export interface CreateUserDto {
 }
 
 export interface UpdateMembershipDto {
-  role: string;
+  fullName?: string;
+  role?: string;
+  status?: string;
 }

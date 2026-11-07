@@ -3,6 +3,8 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
+  Post,
   Put,
   UseGuards,
 } from '@nestjs/common';
@@ -11,6 +13,7 @@ import { MembershipGuard } from '../../auth/membership.guard.js';
 import type { Membership as ActiveMembership } from '../../auth/membership.guard.js';
 import { Roles } from '../../auth/roles.decorator.js';
 import type { AssignTeacherDto } from './dto/assign-teacher.dto.js';
+import type { CreateTeacherDto, UpdateTeacherDto } from './dto/teacher.dto.js';
 import { TeachersService } from './teachers.service.js';
 
 @Controller()
@@ -22,6 +25,31 @@ export class TeachersController {
   @Get('teachers')
   listTeachers(@CurrentMembership() membership: ActiveMembership) {
     return this.teachers.listTeachers(membership);
+  }
+
+  @Get('teachers/:id')
+  getTeacher(
+    @CurrentMembership() membership: ActiveMembership,
+    @Param('id') id: string,
+  ) {
+    return this.teachers.getTeacher(membership, id);
+  }
+
+  @Post('teachers')
+  createTeacher(
+    @CurrentMembership() membership: ActiveMembership,
+    @Body() body: CreateTeacherDto,
+  ) {
+    return this.teachers.createTeacher(membership, body);
+  }
+
+  @Patch('teachers/:id')
+  updateTeacher(
+    @CurrentMembership() membership: ActiveMembership,
+    @Param('id') id: string,
+    @Body() body: UpdateTeacherDto,
+  ) {
+    return this.teachers.updateTeacher(membership, id, body);
   }
 
   @Put('subjects/:id/teacher')

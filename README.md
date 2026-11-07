@@ -61,7 +61,28 @@ Endpoints para que la escuela cargue y edite sus datos, cursos y materias. Todos
 - `POST /subjects` → `{ name, courseId, teacherMembershipId? }` (`teacherMembershipId` es el id de la membresía con rol `teacher` en la institución). Nombre duplicado en el curso → `409`.
 - `PATCH /subjects/:id` → `{ name?, courseId?, teacherMembershipId? }` (`teacherMembershipId: null` desasigna al docente).
 - `DELETE /subjects/:id`.
-- `GET /guardians` (roles `admin`, `director`) → `[{ id, fullName }]`: los tutores de la institución, para vincularlos a un alumno.
+- `GET /guardians` (roles `admin`, `director`) → `[{ id, fullName }]`: los tutores activos de la institución, para vincularlos a un alumno.
+- `GET /students/:id/guardians` → `[{ id, fullName, relationship, phone, email }]`: los tutores vinculados al alumno.
+- `POST /students/:id/guardians` → `{ guardianMembershipId, relationship?, phone? }`. `relationship` es `madre` | `padre` | `tutor` | `otro`.
+- `PATCH /students/:id/guardians/:guardianMembershipId` → `{ relationship?, phone? }`.
+- `DELETE /students/:id/guardians/:guardianMembershipId`.
+- `GET /teachers` → `[{ id, fullName, status, dni, subjects }]`.
+- `GET /teachers/:id` → lo anterior más `{ email, phone, training, startYear, notes }`.
+- `POST /teachers` → `{ fullName, email, temporaryPassword, dni?, phone?, training?, startYear?, notes? }`. DNI repetido en la institución → `409`.
+- `PATCH /teachers/:id` → `{ fullName?, status?, dni?, phone?, training?, startYear?, notes? }` (al menos un campo).
+
+### Usuarios
+
+Solo rol `admin`.
+
+- `GET /users` → `[{ id, userId, email, fullName, role, status }]`. `id` es el de la membresía.
+- `POST /users` → `{ email, fullName, role, temporaryPassword }`.
+- `PATCH /memberships/:id` → `{ fullName?, role?, status? }` (al menos un campo). `status` es `active` | `inactive`.
+- `DELETE /memberships/:id`. Si la persona se queda sin roles en la institución, también se borran sus datos personales.
+
+Una membresía inactiva no puede usar la API (`403`) y no aparece en `GET /me`. La institución siempre conserva un administrador activo: dejarla sin ninguno → `409`.
+
+Los datos personales del personal y los tutores (DNI, teléfono, formación) van en `member_details`, por institución y sin políticas RLS: solo los lee la API.
 
 ## Correr
 
