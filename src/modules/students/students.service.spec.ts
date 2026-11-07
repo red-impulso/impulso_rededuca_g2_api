@@ -16,7 +16,7 @@ interface QueryResult {
 
 interface WriteCall {
   table: string;
-  method: 'insert' | 'update' | 'delete';
+  method: 'insert' | 'update' | 'upsert' | 'delete';
   rows: unknown;
 }
 
@@ -57,6 +57,7 @@ describe('StudentsService', () => {
   const getUser = vi.fn();
   const createUser = vi.fn();
   const deleteUser = vi.fn();
+  const getUserById = vi.fn();
   // Each table keeps a FIFO queue of results; every awaited query consumes one.
   let queues: Record<string, QueryResult[]>;
   let writes: WriteCall[];
@@ -76,6 +77,7 @@ describe('StudentsService', () => {
       single: vi.fn(),
       insert: vi.fn(),
       update: vi.fn(),
+      upsert: vi.fn(),
       delete: vi.fn(),
       // oxlint-disable-next-line no-thenable -- supabase builders are thenable
       then: (onFulfilled: (value: QueryResult) => unknown) =>
@@ -96,7 +98,7 @@ describe('StudentsService', () => {
     ] as const) {
       chain[method].mockReturnValue(chain);
     }
-    for (const method of ['insert', 'update', 'delete'] as const) {
+    for (const method of ['insert', 'update', 'upsert', 'delete'] as const) {
       chain[method].mockImplementation((rows: unknown) => {
         writes.push({ table, method, rows });
         return chain;
@@ -109,7 +111,7 @@ describe('StudentsService', () => {
 
   const supabase = {
     admin: {
-      auth: { getUser, admin: { createUser, deleteUser } },
+      auth: { getUser, admin: { createUser, deleteUser, getUserById } },
       from,
     },
   };
@@ -143,6 +145,10 @@ describe('StudentsService', () => {
       error: null,
     });
     deleteUser.mockResolvedValue({ data: {}, error: null });
+    getUserById.mockResolvedValue({
+      data: { user: { email: 'ana@demo.rededuca' } },
+      error: null,
+    });
     const module: TestingModule = await Test.createTestingModule({
       imports: [SupabaseModule, StudentsModule],
       providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
@@ -221,6 +227,82 @@ describe('StudentsService', () => {
     });
   });
 
+  describe('GET /students/:id', () => {
+    it('returns the student with its personal data and email', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [{ data: enrollmentRow(), error: null }];
+      queues.student_details = [
+        {
+          data: {
+            birth_date: '2010-03-12',
+            address: 'Calle de Prueba 123',
+            phone: '388 000 0000',
+            updated_at: '2026-11-07T12:00:00Z',
+          },
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get(`/students/${STUDENT_ID}`),
+      ).expect(200);
+
+      expect(getUserById).toHaveBeenCalledWith(STUDENT_ID);
+      expect(response.body).toMatchObject({
+        id: STUDENT_ID,
+        firstName: 'Ana',
+        course: { id: COURSE_ID, year: 1 },
+        birthDate: '2010-03-12',
+        address: 'Calle de Prueba 123',
+        phone: '388 000 0000',
+        email: 'ana@demo.rededuca',
+        updatedAt: '2026-11-07T12:00:00Z',
+      });
+    });
+
+    it('returns nulls when the student has no personal data yet', async () => {
+      authAs('admin-1');
+      memberAs('director');
+      queues.enrollments = [{ data: enrollmentRow(), error: null }];
+      queues.student_details = [{ data: null, error: null }];
+
+      const response = await authed(
+        request(app.getHttpServer()).get(`/students/${STUDENT_ID}`),
+      ).expect(200);
+
+      expect(response.body).toMatchObject({
+        birthDate: null,
+        address: null,
+        phone: null,
+        updatedAt: null,
+      });
+    });
+
+    it('returns 404 for a student of another institution', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [{ data: null, error: null }];
+
+      await authed(
+        request(app.getHttpServer()).get(`/students/${STUDENT_ID}`),
+      ).expect(404);
+      expect(getUserById).not.toHaveBeenCalled();
+    });
+
+    it.each(['teacher', 'guardian', 'student'])(
+      'returns 403 for the %s role',
+      async (role) => {
+        authAs('user-1');
+        memberAs(role);
+
+        await authed(
+          request(app.getHttpServer()).get(`/students/${STUDENT_ID}`),
+        ).expect(403);
+      },
+    );
+  });
+
   describe('POST /students', () => {
     const payload = {
       firstName: 'Ana',
@@ -272,6 +354,46 @@ describe('StudentsService', () => {
         firstName: 'Ana',
         status: 'active',
       });
+    });
+
+    it('saves the personal data when it comes in the body', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.courses = [{ data: courseRow(), error: null }];
+      queues.profiles = [
+        { data: [], error: null },
+        { data: profileRow({ id: NEW_USER_ID }), error: null },
+      ];
+      queues.enrollments = [{ data: null, error: null }];
+      queues.memberships.push({ data: null, error: null });
+
+      await authed(
+        request(app.getHttpServer())
+          .post('/students')
+          .send({ ...payload, birthDate: '2010-03-12', address: ' Calle 1 ' }),
+      ).expect(201);
+
+      const details = writes.find((w) => w.table === 'student_details');
+      expect(details).toMatchObject({
+        method: 'upsert',
+        rows: {
+          student_id: NEW_USER_ID,
+          birth_date: '2010-03-12',
+          address: 'Calle 1',
+        },
+      });
+    });
+
+    it('returns 400 for an impossible birth date, before creating the user', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      await authed(
+        request(app.getHttpServer())
+          .post('/students')
+          .send({ ...payload, birthDate: '2010-02-31' }),
+      ).expect(400);
+      expect(createUser).not.toHaveBeenCalled();
     });
 
     it('returns 409 when the DNI is already used in the institution', async () => {
@@ -399,6 +521,63 @@ describe('StudentsService', () => {
       expect(
         writes.some((w) => w.method === 'delete'),
       ).toBe(false);
+    });
+
+    it('saves personal data, clearing a blank field', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [
+        { data: enrollmentRow(), error: null },
+        { data: enrollmentRow(), error: null },
+      ];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/students/${STUDENT_ID}`)
+          .send({ phone: '388 000 0000', address: '  ' }),
+      ).expect(200);
+
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toMatchObject({
+        table: 'student_details',
+        method: 'upsert',
+        rows: { student_id: STUDENT_ID, phone: '388 000 0000', address: null },
+      });
+      expect((writes[0].rows as { updated_at: string }).updated_at).toBeTruthy();
+    });
+
+    it('marks the update time also when only the name changes', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [
+        { data: enrollmentRow(), error: null },
+        { data: enrollmentRow(), error: null },
+      ];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/students/${STUDENT_ID}`)
+          .send({ firstName: 'Anita' }),
+      ).expect(200);
+
+      const details = writes.find((w) => w.table === 'student_details');
+      expect(Object.keys(details?.rows as object).sort()).toEqual([
+        'student_id',
+        'updated_at',
+      ]);
+    });
+
+    it('returns 400 and writes nothing for a malformed birth date', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [{ data: enrollmentRow(), error: null }];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/students/${STUDENT_ID}`)
+          .send({ firstName: 'Anita', birthDate: '12/03/2010' }),
+      ).expect(400);
+      expect(writes).toHaveLength(0);
     });
 
     it('returns 409 when the new DNI is already used by another student', async () => {

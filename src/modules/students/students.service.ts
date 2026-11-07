@@ -10,6 +10,7 @@ import { SupabaseService } from '../../supabase/supabase.service.js';
 import type {
   CreateStudentDto,
   ListStudentsQuery,
+  StudentDetailsDto,
   UpdateStudentDto,
 } from './dto/student.dto.js';
 
@@ -32,6 +33,14 @@ export interface StudentResponse {
   dni: string | null;
   status: 'active' | 'inactive';
   course: CourseSummary | null;
+}
+
+export interface StudentFileResponse extends StudentResponse {
+  birthDate: string | null;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  updatedAt: string | null;
 }
 
 interface ProfileRow {
@@ -70,6 +79,49 @@ function isEmailTaken(error: unknown): boolean {
     err?.code === 'email_exists' ||
     (err?.message ?? '').toLowerCase().includes('already registered')
   );
+}
+
+function parseBirthDate(value: unknown): string | null {
+  if (value === null || value === '') {
+    return null;
+  }
+  // The round trip rejects dates that do not exist, like 2010-02-31.
+  const valid =
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    !Number.isNaN(Date.parse(value)) &&
+    new Date(value).toISOString().startsWith(value);
+  if (!valid) {
+    throw new BadRequestException('La fecha de nacimiento no es válida');
+  }
+  return value;
+}
+
+function parseText(value: unknown, label: string): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    throw new BadRequestException(`${label} no es válido`);
+  }
+  return value.trim() || null;
+}
+
+// Only the fields that came in the body, as student_details columns.
+function parseDetails(
+  dto: StudentDetailsDto | undefined,
+): Record<string, string | null> {
+  const row: Record<string, string | null> = {};
+  if (dto?.birthDate !== undefined) {
+    row.birth_date = parseBirthDate(dto.birthDate);
+  }
+  if (dto?.address !== undefined) {
+    row.address = parseText(dto.address, 'La dirección');
+  }
+  if (dto?.phone !== undefined) {
+    row.phone = parseText(dto.phone, 'El teléfono');
+  }
+  return row;
 }
 
 const ENROLLMENT_SELECT =
@@ -133,6 +185,34 @@ export class StudentsService {
     );
   }
 
+  async getStudent(
+    membership: ActiveMembership,
+    studentId: string,
+  ): Promise<StudentFileResponse> {
+    const row = await this.loadStudent(membership, studentId);
+
+    const [details, account] = await Promise.all([
+      this.supabase.admin
+        .from('student_details')
+        .select('birth_date, address, phone, updated_at')
+        .eq('student_id', studentId)
+        .maybeSingle(),
+      this.supabase.admin.auth.admin.getUserById(studentId),
+    ]);
+    if (details.error || account.error) {
+      throw new InternalServerErrorException();
+    }
+
+    return {
+      ...this.toStudent(row, row.courses),
+      birthDate: details.data?.birth_date ?? null,
+      address: details.data?.address ?? null,
+      phone: details.data?.phone ?? null,
+      email: account.data.user?.email ?? null,
+      updatedAt: details.data?.updated_at ?? null,
+    };
+  }
+
   async createStudent(
     membership: ActiveMembership,
     dto: CreateStudentDto | undefined,
@@ -152,6 +232,7 @@ export class StudentsService {
     const firstName = dto.firstName.trim();
     const lastName = dto.lastName.trim();
     const email = dto.email.trim();
+    const details = parseDetails(dto);
 
     const course = await this.loadCourse(membership, dto.courseId);
     await this.assertDniAvailable(membership, dni);
@@ -214,6 +295,10 @@ export class StudentsService {
         throw new InternalServerErrorException();
       }
 
+      if (Object.keys(details).length > 0) {
+        await this.saveDetails(userId, details);
+      }
+
       return this.toStudent(profile as ProfileRow, course);
     } catch (error) {
       await this.supabase.admin.auth.admin.deleteUser(userId).catch(() => {});
@@ -227,6 +312,7 @@ export class StudentsService {
     dto: UpdateStudentDto | undefined,
   ): Promise<StudentResponse> {
     const current = await this.loadStudent(membership, studentId);
+    const details = parseDetails(dto);
 
     const profileUpdate: Record<string, unknown> = {};
     let firstName = current.first_name;
@@ -290,13 +376,34 @@ export class StudentsService {
       }
     }
 
-    if (Object.keys(profileUpdate).length === 0 && dto?.courseId === undefined) {
+    if (
+      Object.keys(profileUpdate).length === 0 &&
+      Object.keys(details).length === 0 &&
+      dto?.courseId === undefined
+    ) {
       throw new BadRequestException('No hay cambios para guardar');
     }
+
+    await this.saveDetails(studentId, details);
 
     return this.loadStudent(membership, studentId).then((row) =>
       this.toStudent(row, row.courses),
     );
+  }
+
+  // Also records when the student file changed, even if only the name did.
+  private async saveDetails(
+    studentId: string,
+    details: Record<string, string | null>,
+  ): Promise<void> {
+    const { error } = await this.supabase.admin.from('student_details').upsert({
+      student_id: studentId,
+      updated_at: new Date().toISOString(),
+      ...details,
+    });
+    if (error) {
+      throw new InternalServerErrorException();
+    }
   }
 
   private toStudent(
