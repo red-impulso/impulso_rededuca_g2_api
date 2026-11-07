@@ -84,6 +84,32 @@ Una membresía inactiva no puede usar la API (`403`) y no aparece en `GET /me`. 
 
 Los datos personales del personal y los tutores (DNI, teléfono, formación) van en `member_details`, por institución y sin políticas RLS: solo los lee la API.
 
+## Postulaciones de la landing
+
+`POST /leads` es público (sin token) y recibe el formulario de la landing del grupo 2:
+
+```json
+{
+  "institutionName": "Escuela 12",
+  "institutionType": "Institución educativa pública",
+  "city": "Perico",
+  "studentCount": 320,
+  "contactName": "Ana López",
+  "phone": "388 400-0000",
+  "email": "ana@escuela.edu.ar",
+  "comment": "Opcional, hasta 600 caracteres",
+  "website": ""
+}
+```
+
+- `institutionType`: `Institución educativa pública` | `Institución educativa privada` | `Institución de gestión social o cooperativa` | `Otra`.
+- `studentCount`: entero de 1 a 100000. `phone`: entre 8 y 15 dígitos.
+- `website` es una trampa para robots: el formulario lo oculta. Si viene lleno, la API responde `201` sin guardar nada.
+- Datos inválidos → `400`. Más de 5 envíos por minuto desde la misma IP → `429`.
+- La landing publicada (`https://proyecto-red-educa-grupo-2.vercel.app`) siempre está permitida por CORS.
+
+Solo un administrador puede ver las postulaciones con `GET /leads?status=new|contacted|discarded`, y marcarlas con `PATCH /leads/:id` → `{ status }`.
+
 ## Correr
 
 ```bash

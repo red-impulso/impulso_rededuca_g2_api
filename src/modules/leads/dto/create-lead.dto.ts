@@ -1,13 +1,13 @@
+// Fields of the group 2 landing form.
 export interface CreateLeadDto {
   institutionName: string;
-  contactName: string;
+  institutionType: string;
   city: string;
-  contactRole: string;
-  level: string;
-  contactChannel: string;
   studentCount: number;
-  comment: string;
-  privacyAccepted: boolean;
+  contactName: string;
+  phone: string;
+  email: string;
+  comment?: string | null;
   // Honeypot: hidden in the form; a real visitor never fills it.
   website?: string;
 }

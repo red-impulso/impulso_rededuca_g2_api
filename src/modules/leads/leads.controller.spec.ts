@@ -93,35 +93,35 @@ describe('LeadsController', () => {
       .set('Authorization', 'Bearer valid-token')
       .set('X-Institution-Id', 'school-1');
 
+  // Same fields as the group 2 landing form.
   const validBody = (over: Record<string, unknown> = {}) => ({
     institutionName: 'Escuela 12',
-    contactName: 'Ana López',
+    institutionType: 'Institución educativa pública',
     city: 'La Plata',
-    contactRole: 'Directora',
-    level: 'Primario',
-    contactChannel: 'ana@escuela.edu.ar',
     studentCount: 320,
+    contactName: 'Ana López',
+    phone: '+54 221 456-7890',
+    email: 'ana@escuela.edu.ar',
     comment: 'Nos interesa la propuesta',
-    privacyAccepted: true,
     ...over,
   });
 
   const leadRow = (over: Record<string, unknown> = {}) => ({
     id: LEAD_ID,
     institution_name: 'Escuela 12',
-    contact_name: 'Ana López',
+    institution_type: 'Institución educativa pública',
     city: 'La Plata',
-    contact_role: 'Directora',
-    level: 'Primario',
-    contact_channel: 'ana@escuela.edu.ar',
     student_count: 320,
+    contact_name: 'Ana López',
+    phone: '+54 221 456-7890',
+    email: 'ana@escuela.edu.ar',
     comment: 'Nos interesa la propuesta',
     status: 'new',
     created_at: '2026-11-07T12:00:00Z',
     ...over,
   });
 
-  const postLead = (body: unknown) =>
+  const postLead = (body: object) =>
     request(app.getHttpServer()).post('/leads').send(body);
 
   beforeEach(async () => {
@@ -157,28 +157,50 @@ describe('LeadsController', () => {
         method: 'insert',
         rows: {
           institution_name: 'Escuela 12',
-          contact_name: 'Ana López',
+          institution_type: 'Institución educativa pública',
           city: 'La Plata',
-          contact_role: 'Directora',
-          level: 'Primario',
-          contact_channel: 'ana@escuela.edu.ar',
           student_count: 320,
+          contact_name: 'Ana López',
+          phone: '+54 221 456-7890',
+          email: 'ana@escuela.edu.ar',
           comment: 'Nos interesa la propuesta',
-          privacy_accepted_at: expect.any(String),
         },
       });
     });
 
-    it('accepts a phone number as contact channel', async () => {
+    it('trims the text fields before saving', async () => {
       queues.leads = [{ data: { id: 'lead-2' }, error: null }];
 
       await postLead(
-        validBody({ contactChannel: '+54 221 456-7890' }),
+        validBody({ institutionName: '  Escuela 12  ', email: ' ana@escuela.edu.ar ' }),
       ).expect(201);
 
       expect(writes[0]).toMatchObject({
-        rows: { contact_channel: '+54 221 456-7890' },
+        rows: { institution_name: 'Escuela 12', email: 'ana@escuela.edu.ar' },
       });
+    });
+
+    it.each([undefined, '', '   '])(
+      'saves a null comment when it comes as %j: the message is optional',
+      async (comment) => {
+        queues.leads = [{ data: { id: 'lead-3' }, error: null }];
+
+        await postLead(validBody({ comment })).expect(201);
+
+        expect(writes[0]).toMatchObject({ rows: { comment: null } });
+      },
+    );
+
+    it('returns 400 for an institution type outside the list', async () => {
+      await postLead(validBody({ institutionType: 'Club de fútbol' })).expect(
+        400,
+      );
+      expect(writes).toHaveLength(0);
+    });
+
+    it('returns 400 for a comment longer than 600 characters', async () => {
+      await postLead(validBody({ comment: 'a'.repeat(601) })).expect(400);
+      expect(writes).toHaveLength(0);
     });
 
     it('returns 400 when a required field is missing', async () => {
@@ -188,23 +210,23 @@ describe('LeadsController', () => {
       expect(writes).toHaveLength(0);
     });
 
-    it.each([0, 'abc'])('returns 400 for studentCount %s', async (value) => {
+    it.each([0, 'abc', 100001, 12.5])('returns 400 for studentCount %s', async (value) => {
       await postLead(validBody({ studentCount: value })).expect(400);
       expect(writes).toHaveLength(0);
     });
 
-    it('returns 400 for a malformed email or phone', async () => {
-      await postLead(validBody({ contactChannel: 'no-es-contacto' })).expect(
-        400,
-      );
-      await postLead(validBody({ contactChannel: '123' })).expect(400);
+    it('returns 400 for a malformed email', async () => {
+      await postLead(validBody({ email: 'no-es-correo' })).expect(400);
       expect(writes).toHaveLength(0);
     });
 
-    it('returns 400 when privacy is not accepted', async () => {
-      await postLead(validBody({ privacyAccepted: false })).expect(400);
-      expect(writes).toHaveLength(0);
-    });
+    it.each(['123', '+54 221 abc', '1234567890123456'])(
+      'returns 400 for the phone %s',
+      async (phone) => {
+        await postLead(validBody({ phone })).expect(400);
+        expect(writes).toHaveLength(0);
+      },
+    );
 
     it('answers 201 without saving when the honeypot is filled', async () => {
       const response = await postLead(
@@ -262,12 +284,12 @@ describe('LeadsController', () => {
       expect(response.body[0]).toEqual({
         id: 'lead-new',
         institutionName: 'Escuela 12',
-        contactName: 'Ana López',
+        institutionType: 'Institución educativa pública',
         city: 'La Plata',
-        contactRole: 'Directora',
-        level: 'Primario',
-        contactChannel: 'ana@escuela.edu.ar',
         studentCount: 320,
+        contactName: 'Ana López',
+        phone: '+54 221 456-7890',
+        email: 'ana@escuela.edu.ar',
         comment: 'Nos interesa la propuesta',
         status: 'new',
         createdAt: '2026-11-07T12:00:00Z',
