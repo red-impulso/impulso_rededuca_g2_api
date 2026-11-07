@@ -1,4 +1,11 @@
-export interface CreateStudentDto {
+// Optional personal data of the student file. A blank value clears the field.
+export interface StudentDetailsDto {
+  birthDate?: string | null;
+  address?: string | null;
+  phone?: string | null;
+}
+
+export interface CreateStudentDto extends StudentDetailsDto {
   firstName: string;
   lastName: string;
   dni: string;
@@ -7,7 +14,7 @@ export interface CreateStudentDto {
   password?: string;
 }
 
-export interface UpdateStudentDto {
+export interface UpdateStudentDto extends StudentDetailsDto {
   firstName?: string;
   lastName?: string;
   dni?: string;
