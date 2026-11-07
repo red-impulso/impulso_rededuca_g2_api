@@ -1,6 +1,7 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import type { AuthUser } from '../../auth/auth.guard.js';
 import type { Membership as ActiveMembership } from '../../auth/membership.guard.js';
+import { fetchAllRows } from '../../supabase/fetch-all-rows.js';
 import { SupabaseService } from '../../supabase/supabase.service.js';
 
 export interface CourseSummary {
@@ -57,29 +58,6 @@ interface DashboardEnrollmentRow {
 
 const LOW_ATTENDANCE_THRESHOLD = 85;
 const LOW_ATTENDANCE_WINDOW_DAYS = 30;
-const PAGE_SIZE = 1000;
-
-// Supabase returns 1000 rows at most per query, and a school reaches that many
-// attendance records in a few days: without paging the numbers would silently
-// be computed from part of the data.
-async function fetchAllRows(
-  query: (
-    from: number,
-    to: number,
-  ) => PromiseLike<{ data: unknown[] | null; error: unknown }>,
-): Promise<{ data: unknown[]; error: unknown }> {
-  const rows: unknown[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await query(from, from + PAGE_SIZE - 1);
-    if (error) {
-      return { data: [], error };
-    }
-    rows.push(...(data ?? []));
-    if ((data?.length ?? 0) < PAGE_SIZE) {
-      return { data: rows, error: null };
-    }
-  }
-}
 
 function firstRow<T>(value: T | T[] | null | undefined): T | undefined {
   return Array.isArray(value) ? value[0] : (value ?? undefined);

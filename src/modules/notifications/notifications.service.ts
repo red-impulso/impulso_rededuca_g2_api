@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import type { AuthUser } from '../../auth/auth.guard.js';
 import type { Membership as ActiveMembership } from '../../auth/membership.guard.js';
+import { fetchAllRows } from '../../supabase/fetch-all-rows.js';
 import { SupabaseService } from '../../supabase/supabase.service.js';
 import type { AnnouncementCreatedPayload } from '../announcements/announcements.service.js';
 import type { AttendanceSavedPayload } from '../attendance/attendance.service.js';
@@ -232,16 +233,20 @@ export class NotificationsService {
   ): Promise<void> {
     let guardianIds: Set<string>;
     if (payload.scope === 'institution') {
-      const { data, error } = await this.supabase.admin
-        .from('memberships')
-        .select('user_id')
-        .eq('school_id', payload.schoolId)
-        .eq('role', 'guardian');
+      const { data, error } = await fetchAllRows((from, to) =>
+        this.supabase.admin
+          .from('memberships')
+          .select('user_id')
+          .eq('school_id', payload.schoolId)
+          .eq('role', 'guardian')
+          .order('id')
+          .range(from, to),
+      );
       if (error) {
         throw new InternalServerErrorException();
       }
       guardianIds = new Set(
-        (data ?? []).map((row: { user_id: string }) => row.user_id),
+        (data as { user_id: string }[]).map((row) => row.user_id),
       );
     } else if (payload.scope === 'course' && payload.courseId) {
       const { data: enrollments, error } = await this.supabase.admin

@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Membership as ActiveMembership } from '../../auth/membership.guard.js';
+import { fetchAllRows } from '../../supabase/fetch-all-rows.js';
 import { SupabaseService } from '../../supabase/supabase.service.js';
 import { UsersService } from '../users/users.service.js';
 import type {
@@ -106,17 +107,21 @@ export class GuardiansService {
   async listSchoolGuardians(
     membership: ActiveMembership,
   ): Promise<GuardianResponse[]> {
-    const { data, error } = await this.supabase.admin
-      .from('memberships')
-      .select('id, user_id, profiles(full_name)')
-      .eq('school_id', membership.institutionId)
-      .eq('role', 'guardian')
-      .eq('status', 'active');
+    const { data, error } = await fetchAllRows((from, to) =>
+      this.supabase.admin
+        .from('memberships')
+        .select('id, user_id, profiles(full_name)')
+        .eq('school_id', membership.institutionId)
+        .eq('role', 'guardian')
+        .eq('status', 'active')
+        .order('id')
+        .range(from, to),
+    );
 
     if (error) {
       throw new InternalServerErrorException();
     }
-    return toGuardians((data ?? []) as MembershipRow[]);
+    return toGuardians(data as MembershipRow[]);
   }
 
   async listGuardians(

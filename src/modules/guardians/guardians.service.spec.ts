@@ -56,6 +56,7 @@ describe('GuardiansService', () => {
       eq: vi.fn(),
       in: vi.fn(),
       order: vi.fn(),
+      range: vi.fn(),
       limit: vi.fn(),
       maybeSingle: vi.fn(),
       single: vi.fn(),
@@ -74,6 +75,7 @@ describe('GuardiansService', () => {
       'eq',
       'in',
       'order',
+      'range',
       'limit',
       'maybeSingle',
       'single',
@@ -148,6 +150,29 @@ describe('GuardiansService', () => {
   });
 
   describe('GET /guardians', () => {
+    it('lists every guardian past the 1000 rows of a single query', async () => {
+      authAs('user-1');
+      memberAs('admin');
+      const guardian = (index: number) =>
+        guardianMembershipRow({
+          id: `g-${index}`,
+          user_id: `guardian-${index}`,
+        });
+      queues.memberships.push(
+        {
+          data: Array.from({ length: 1000 }, (_, index) => guardian(index)),
+          error: null,
+        },
+        { data: [guardian(1000)], error: null },
+      );
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/guardians'),
+      ).expect(200);
+
+      expect(response.body).toHaveLength(1001);
+    });
+
     it.each(['admin', 'director'])(
       'lists the guardians of the institution for %s, by name',
       async (role) => {

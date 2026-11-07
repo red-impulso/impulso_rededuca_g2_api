@@ -111,7 +111,7 @@ describe('MeController', () => {
   it('returns 401 when the token is invalid', async () => {
     getUser.mockResolvedValue({
       data: { user: null },
-      error: { message: 'Invalid token' },
+      error: { status: 403, message: 'Invalid token' },
     });
 
     await request(app.getHttpServer())
