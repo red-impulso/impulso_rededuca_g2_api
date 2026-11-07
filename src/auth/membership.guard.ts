@@ -33,6 +33,7 @@ interface MembershipRow {
   id: string;
   school_id: string;
   role: string;
+  status?: string;
 }
 
 @Injectable()
@@ -64,7 +65,7 @@ export class MembershipGuard implements CanActivate {
 
     const { data, error } = await this.supabase.admin
       .from('memberships')
-      .select('id, school_id, role')
+      .select('id, school_id, role, status')
       .eq('user_id', request.user.id)
       .eq('school_id', institutionId);
 
@@ -72,9 +73,16 @@ export class MembershipGuard implements CanActivate {
       throw new InternalServerErrorException();
     }
 
-    const row = this.pickHighestRank(data ?? []);
+    const rows = (data ?? []) as MembershipRow[];
+    const row = this.pickHighestRank(
+      rows.filter((candidate) => candidate.status !== 'inactive'),
+    );
     if (!row) {
-      throw new ForbiddenException('No tenés permiso para hacer esto');
+      throw new ForbiddenException(
+        rows.length > 0
+          ? 'Tu usuario está inactivo en esta institución'
+          : 'No tenés permiso para hacer esto',
+      );
     }
 
     const allowed = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [

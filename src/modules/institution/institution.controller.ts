@@ -23,6 +23,11 @@ import { InstitutionService } from './institution.service.js';
 export class InstitutionController {
   constructor(private readonly institution: InstitutionService) {}
 
+  @Get('institution')
+  getInstitution(@CurrentMembership() membership: ActiveMembership) {
+    return this.institution.getInstitution(membership);
+  }
+
   @Patch('institution')
   updateInstitution(
     @CurrentMembership() membership: ActiveMembership,

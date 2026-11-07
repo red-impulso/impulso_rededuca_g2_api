@@ -13,7 +13,8 @@ import { SupabaseModule } from '../supabase/supabase.module.js';
 import { SupabaseService } from '../supabase/supabase.service.js';
 import { AuthGuard } from './auth.guard.js';
 import { CurrentMembership } from './current-membership.decorator.js';
-import { Membership, MembershipGuard } from './membership.guard.js';
+import { MembershipGuard } from './membership.guard.js';
+import type { Membership } from './membership.guard.js';
 import { Roles } from './roles.decorator.js';
 
 @Controller('staff')
@@ -150,6 +151,39 @@ describe('MembershipGuard', () => {
       id: 'm-2',
       role: 'admin',
     });
+  });
+
+  it('returns 403 when the only membership is inactive', async () => {
+    eqSchool.mockResolvedValue({
+      data: [{ id: 'm-1', school_id: 'school-1', role: 'admin', status: 'inactive' }],
+      error: null,
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/staff')
+      .set('Authorization', 'Bearer valid-token')
+      .set('X-Institution-Id', 'school-1')
+      .expect(403);
+
+    expect(response.body.message).toBe('Tu usuario está inactivo en esta institución');
+  });
+
+  it('ignores an inactive membership when another one is active', async () => {
+    eqSchool.mockResolvedValue({
+      data: [
+        { id: 'm-1', school_id: 'school-1', role: 'admin', status: 'inactive' },
+        { id: 'm-2', school_id: 'school-1', role: 'teacher', status: 'active' },
+      ],
+      error: null,
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/staff')
+      .set('Authorization', 'Bearer valid-token')
+      .set('X-Institution-Id', 'school-1')
+      .expect(200);
+
+    expect(response.body.membership).toMatchObject({ id: 'm-2', role: 'teacher' });
   });
 
   it('accepts any membership on routes without @Roles', () => {

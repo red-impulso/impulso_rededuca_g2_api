@@ -5,6 +5,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { vi } from 'vitest';
+import type { AnnouncementScope } from '../announcements/dto/create-announcement.dto.js';
 import { AuthGuard } from '../../auth/auth.guard.js';
 import { SupabaseModule } from '../../supabase/supabase.module.js';
 import { SupabaseService } from '../../supabase/supabase.service.js';
@@ -42,6 +43,7 @@ describe('NotificationsService', () => {
       in: vi.fn(),
       is: vi.fn(),
       order: vi.fn(),
+      range: vi.fn(),
       limit: vi.fn(),
       maybeSingle: vi.fn(),
       single: vi.fn(),
@@ -60,6 +62,7 @@ describe('NotificationsService', () => {
       'in',
       'is',
       'order',
+      'range',
       'limit',
       'maybeSingle',
       'single',
@@ -266,7 +269,7 @@ describe('NotificationsService', () => {
     const announcementPayload = (over: Record<string, unknown>) => ({
       schoolId: 'school-1',
       announcementId: 'ann-1',
-      scope: 'institution',
+      scope: 'institution' as AnnouncementScope,
       courseId: null,
       studentId: null,
       title: 'Reunión general',
@@ -300,6 +303,22 @@ describe('NotificationsService', () => {
           },
         ],
       });
+    });
+
+    it('notifies every guardian past the 1000 rows of a single query', async () => {
+      const guardian = (index: number) => ({ user_id: `guardian-${index}` });
+      queues.memberships = [
+        {
+          data: Array.from({ length: 1000 }, (_, index) => guardian(index)),
+          error: null,
+        },
+        { data: [guardian(1000)], error: null },
+      ];
+      queues.notifications = [{ data: null, error: null }];
+
+      await service.notifyAnnouncementCreated(announcementPayload({}));
+
+      expect(notificationRows()[0].rows).toHaveLength(1001);
     });
 
     it('notifies only the tutors of the course students for course scope', async () => {

@@ -6,10 +6,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Membership as ActiveMembership } from '../../auth/membership.guard.js';
+import { fetchAllRows } from '../../supabase/fetch-all-rows.js';
 import { SupabaseService } from '../../supabase/supabase.service.js';
 import type {
   CreateStudentDto,
   ListStudentsQuery,
+  StudentDetailsDto,
   UpdateStudentDto,
 } from './dto/student.dto.js';
 
@@ -34,12 +36,24 @@ export interface StudentResponse {
   course: CourseSummary | null;
 }
 
+export interface StudentFileResponse extends StudentResponse {
+  birthDate: string | null;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  updatedAt: string | null;
+}
+
+interface DniRow {
+  dni: string | null;
+}
+
 interface ProfileRow {
   id: string;
   first_name: string | null;
   last_name: string | null;
-  dni: string | null;
   status: string;
+  student_details?: DniRow | DniRow[] | null;
 }
 
 interface EnrollmentRow {
@@ -72,8 +86,51 @@ function isEmailTaken(error: unknown): boolean {
   );
 }
 
+function parseBirthDate(value: unknown): string | null {
+  if (value === null || value === '') {
+    return null;
+  }
+  // The round trip rejects dates that do not exist, like 2010-02-31.
+  const valid =
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    !Number.isNaN(Date.parse(value)) &&
+    new Date(value).toISOString().startsWith(value);
+  if (!valid) {
+    throw new BadRequestException('La fecha de nacimiento no es válida');
+  }
+  return value;
+}
+
+function parseText(value: unknown, label: string): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    throw new BadRequestException(`${label} no es válido`);
+  }
+  return value.trim() || null;
+}
+
+// Only the fields that came in the body, as student_details columns.
+function parseDetails(
+  dto: StudentDetailsDto | undefined,
+): Record<string, string | null> {
+  const row: Record<string, string | null> = {};
+  if (dto?.birthDate !== undefined) {
+    row.birth_date = parseBirthDate(dto.birthDate);
+  }
+  if (dto?.address !== undefined) {
+    row.address = parseText(dto.address, 'La dirección');
+  }
+  if (dto?.phone !== undefined) {
+    row.phone = parseText(dto.phone, 'El teléfono');
+  }
+  return row;
+}
+
 const ENROLLMENT_SELECT =
-  'student_id, created_at, profiles!inner(id, first_name, last_name, dni, status), courses!inner(id, year, division, shift, school_id)';
+  'student_id, created_at, profiles!inner(id, first_name, last_name, status, student_details(dni)), courses!inner(id, year, division, shift, school_id)';
 
 @Injectable()
 export class StudentsService {
@@ -87,29 +144,23 @@ export class StudentsService {
       await this.loadCourse(membership, query.courseId);
     }
 
-    let builder = this.supabase.admin
-      .from('enrollments')
-      .select(ENROLLMENT_SELECT)
-      .eq('courses.school_id', membership.institutionId);
-    if (query?.courseId) {
-      builder = builder.eq('course_id', query.courseId);
-    }
-    const q = query?.q?.trim();
-    if (q) {
-      builder = builder.or(
-        `first_name.ilike.%${q}%,last_name.ilike.%${q}%,dni.ilike.%${q}%`,
-        { referencedTable: 'profiles' },
-      );
-    }
-
-    const { data, error } = await builder;
+    const { data, error } = await fetchAllRows((from, to) => {
+      let builder = this.supabase.admin
+        .from('enrollments')
+        .select(ENROLLMENT_SELECT)
+        .eq('courses.school_id', membership.institutionId);
+      if (query?.courseId) {
+        builder = builder.eq('course_id', query.courseId);
+      }
+      return builder.order('student_id').order('course_id').range(from, to);
+    });
     if (error) {
       throw new InternalServerErrorException();
     }
 
     // One row per enrollment; a student enrolled twice keeps the latest one.
     const byStudent = new Map<string, StudentResponse>();
-    const rows = (data ?? []) as EnrollmentRow[];
+    const rows = data as EnrollmentRow[];
     rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
     for (const row of rows) {
       if (byStudent.has(row.student_id)) {
@@ -124,13 +175,50 @@ export class StudentsService {
         this.toStudent(profile, firstRow(row.courses) ?? null),
       );
     }
-    return [...byStudent.values()].sort(
+    // Filtered here: the DNI lives in a nested table the query cannot OR with.
+    const q = query?.q?.trim().toLowerCase();
+    const found = [...byStudent.values()].filter(
+      (student) =>
+        !q ||
+        [student.firstName, student.lastName, student.dni].some((value) =>
+          value?.toLowerCase().includes(q),
+        ),
+    );
+    return found.sort(
       (a, b) =>
         `${a.lastName ?? ''}${a.firstName ?? ''}`.localeCompare(
           `${b.lastName ?? ''}${b.firstName ?? ''}`,
           'es',
         ),
     );
+  }
+
+  async getStudent(
+    membership: ActiveMembership,
+    studentId: string,
+  ): Promise<StudentFileResponse> {
+    const row = await this.loadStudent(membership, studentId);
+
+    const [details, account] = await Promise.all([
+      this.supabase.admin
+        .from('student_details')
+        .select('birth_date, address, phone, updated_at')
+        .eq('student_id', studentId)
+        .maybeSingle(),
+      this.supabase.admin.auth.admin.getUserById(studentId),
+    ]);
+    if (details.error || account.error) {
+      throw new InternalServerErrorException();
+    }
+
+    return {
+      ...this.toStudent(row, row.courses),
+      birthDate: details.data?.birth_date ?? null,
+      address: details.data?.address ?? null,
+      phone: details.data?.phone ?? null,
+      email: account.data.user?.email ?? null,
+      updatedAt: details.data?.updated_at ?? null,
+    };
   }
 
   async createStudent(
@@ -152,6 +240,7 @@ export class StudentsService {
     const firstName = dto.firstName.trim();
     const lastName = dto.lastName.trim();
     const email = dto.email.trim();
+    const details = parseDetails(dto);
 
     const course = await this.loadCourse(membership, dto.courseId);
     await this.assertDniAvailable(membership, dni);
@@ -183,15 +272,11 @@ export class StudentsService {
             full_name: `${firstName} ${lastName}`,
             first_name: firstName,
             last_name: lastName,
-            dni,
             role: 'student',
             status: 'active',
           })
-          .select('id, first_name, last_name, dni, status')
+          .select('id, first_name, last_name, status')
           .single();
-      if (isUniqueViolation(profileError)) {
-        throw new ConflictException('Ya existe un alumno con ese DNI');
-      }
       if (profileError || !profile) {
         throw new InternalServerErrorException();
       }
@@ -214,7 +299,12 @@ export class StudentsService {
         throw new InternalServerErrorException();
       }
 
-      return this.toStudent(profile as ProfileRow, course);
+      await this.saveDetails(membership, userId, { ...details, dni });
+
+      return this.toStudent(
+        { ...(profile as ProfileRow), student_details: { dni } },
+        course,
+      );
     } catch (error) {
       await this.supabase.admin.auth.admin.deleteUser(userId).catch(() => {});
       throw error;
@@ -227,6 +317,7 @@ export class StudentsService {
     dto: UpdateStudentDto | undefined,
   ): Promise<StudentResponse> {
     const current = await this.loadStudent(membership, studentId);
+    const details = parseDetails(dto);
 
     const profileUpdate: Record<string, unknown> = {};
     let firstName = current.first_name;
@@ -253,7 +344,7 @@ export class StudentsService {
         throw new BadRequestException('El DNI no puede estar vacío');
       }
       await this.assertDniAvailable(membership, dto.dni.trim(), studentId);
-      profileUpdate.dni = dto.dni.trim();
+      details.dni = dto.dni.trim();
     }
     if (dto?.status !== undefined) {
       if (
@@ -282,21 +373,44 @@ export class StudentsService {
         .from('profiles')
         .update(profileUpdate)
         .eq('id', studentId);
-      if (isUniqueViolation(error)) {
-        throw new ConflictException('Ya existe un alumno con ese DNI');
-      }
       if (error) {
         throw new InternalServerErrorException();
       }
     }
 
-    if (Object.keys(profileUpdate).length === 0 && dto?.courseId === undefined) {
+    if (
+      Object.keys(profileUpdate).length === 0 &&
+      Object.keys(details).length === 0 &&
+      dto?.courseId === undefined
+    ) {
       throw new BadRequestException('No hay cambios para guardar');
     }
+
+    await this.saveDetails(membership, studentId, details);
 
     return this.loadStudent(membership, studentId).then((row) =>
       this.toStudent(row, row.courses),
     );
+  }
+
+  // Also records when the student file changed, even if only the name did.
+  private async saveDetails(
+    membership: ActiveMembership,
+    studentId: string,
+    details: Record<string, string | null>,
+  ): Promise<void> {
+    const { error } = await this.supabase.admin.from('student_details').upsert({
+      student_id: studentId,
+      school_id: membership.institutionId,
+      updated_at: new Date().toISOString(),
+      ...details,
+    });
+    if (isUniqueViolation(error)) {
+      throw new ConflictException('Ya existe un alumno con ese DNI');
+    }
+    if (error) {
+      throw new InternalServerErrorException();
+    }
   }
 
   private toStudent(
@@ -307,7 +421,7 @@ export class StudentsService {
       id: profile.id,
       firstName: profile.first_name,
       lastName: profile.last_name,
-      dni: profile.dni,
+      dni: firstRow(profile.student_details)?.dni ?? null,
       status: profile.status === 'inactive' ? 'inactive' : 'active',
       course: course
         ? {
@@ -375,16 +489,16 @@ export class StudentsService {
   private async assertDniAvailable(
     membership: ActiveMembership,
     dni: string,
-    excludeProfileId?: string,
+    excludeStudentId?: string,
   ): Promise<void> {
     let builder = this.supabase.admin
-      .from('profiles')
-      .select('id')
+      .from('student_details')
+      .select('student_id')
       .eq('school_id', membership.institutionId)
       .eq('dni', dni)
       .limit(1);
-    if (excludeProfileId) {
-      builder = builder.neq('id', excludeProfileId);
+    if (excludeStudentId) {
+      builder = builder.neq('student_id', excludeStudentId);
     }
     const { data, error } = await builder;
     if (error) {

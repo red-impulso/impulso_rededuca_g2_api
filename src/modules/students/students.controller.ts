@@ -33,6 +33,14 @@ export class StudentsController {
     return this.students.listStudents(membership, { courseId, q });
   }
 
+  @Get(':id')
+  getStudent(
+    @CurrentMembership() membership: ActiveMembership,
+    @Param('id') studentId: string,
+  ) {
+    return this.students.getStudent(membership, studentId);
+  }
+
   @Post()
   createStudent(
     @CurrentMembership() membership: ActiveMembership,

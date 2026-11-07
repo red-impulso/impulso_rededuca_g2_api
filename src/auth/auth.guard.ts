@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -40,6 +41,11 @@ export class AuthGuard implements CanActivate {
     }
 
     const { data, error } = await this.supabase.admin.auth.getUser(token);
+    // Only a 4xx means the token is bad. Anything else is Supabase failing,
+    // and the session may still be fine.
+    if (error && !(error.status && error.status < 500)) {
+      throw new ServiceUnavailableException();
+    }
     if (error || !data.user) {
       throw new UnauthorizedException();
     }

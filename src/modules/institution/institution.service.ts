@@ -13,6 +13,16 @@ import type { UpdateInstitutionDto } from './dto/update-institution.dto.js';
 
 const SHIFTS = ['morning', 'afternoon', 'evening'] as const;
 const UNIQUE_VIOLATION = '23505';
+const INSTITUTION_COLUMNS =
+  'id, name, address, levels, code, phone, email, shift, modality';
+const OPTIONAL_TEXT_FIELDS = [
+  'code',
+  'phone',
+  'email',
+  'shift',
+  'modality',
+] as const;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -21,6 +31,11 @@ export interface InstitutionResponse {
   name: string;
   address: string | null;
   levels: string[];
+  code: string | null;
+  phone: string | null;
+  email: string | null;
+  shift: string | null;
+  modality: string | null;
 }
 
 export interface CourseResponse {
@@ -53,6 +68,22 @@ interface SubjectRow {
   teacher_id: string | null;
 }
 
+function toInstitution(
+  row: Partial<InstitutionResponse> & { id: string; name: string },
+): InstitutionResponse {
+  return {
+    id: row.id,
+    name: row.name,
+    address: row.address ?? null,
+    levels: row.levels ?? [],
+    code: row.code ?? null,
+    phone: row.phone ?? null,
+    email: row.email ?? null,
+    shift: row.shift ?? null,
+    modality: row.modality ?? null,
+  };
+}
+
 function toCourse(row: CourseRow): CourseResponse {
   return {
     id: row.id,
@@ -74,6 +105,21 @@ function isUniqueViolation(error: unknown): boolean {
 @Injectable()
 export class InstitutionService {
   constructor(private readonly supabase: SupabaseService) {}
+
+  async getInstitution(
+    membership: ActiveMembership,
+  ): Promise<InstitutionResponse> {
+    const { data, error } = await this.supabase.admin
+      .from('schools')
+      .select(INSTITUTION_COLUMNS)
+      .eq('id', membership.institutionId)
+      .single();
+
+    if (error || !data) {
+      throw new InternalServerErrorException();
+    }
+    return toInstitution(data as InstitutionResponse);
+  }
 
   async updateInstitution(
     membership: ActiveMembership,
@@ -105,6 +151,19 @@ export class InstitutionService {
       }
       update.levels = dto.levels.map((level) => level.trim());
     }
+    for (const field of OPTIONAL_TEXT_FIELDS) {
+      const value = dto?.[field];
+      if (value === undefined) {
+        continue;
+      }
+      if (value !== null && typeof value !== 'string') {
+        throw new BadRequestException('Los datos deben ser un texto');
+      }
+      update[field] = value?.trim() || null;
+    }
+    if (typeof update.email === 'string' && !EMAIL_RE.test(update.email)) {
+      throw new BadRequestException('El correo electrónico no es válido');
+    }
     if (Object.keys(update).length === 0) {
       throw new BadRequestException('No hay cambios para guardar');
     }
@@ -113,20 +172,13 @@ export class InstitutionService {
       .from('schools')
       .update(update)
       .eq('id', membership.institutionId)
-      .select('id, name, address, levels')
+      .select(INSTITUTION_COLUMNS)
       .single();
 
     if (error || !data) {
       throw new InternalServerErrorException();
     }
-
-    const row = data as InstitutionResponse & { levels: string[] | null };
-    return {
-      id: row.id,
-      name: row.name,
-      address: row.address,
-      levels: row.levels ?? [],
-    };
+    return toInstitution(data as InstitutionResponse);
   }
 
   async listCourses(membership: ActiveMembership): Promise<CourseResponse[]> {
@@ -467,6 +519,11 @@ export class InstitutionService {
       dto.teacherMembershipId === null
     ) {
       return null;
+    }
+    if (!UUID_RE.test(dto.teacherMembershipId)) {
+      throw new BadRequestException(
+        'El docente indicado no pertenece a la institución',
+      );
     }
     const { data, error } = await this.supabase.admin
       .from('memberships')
