@@ -43,12 +43,16 @@ export interface StudentFileResponse extends StudentResponse {
   updatedAt: string | null;
 }
 
+interface DniRow {
+  dni: string | null;
+}
+
 interface ProfileRow {
   id: string;
   first_name: string | null;
   last_name: string | null;
-  dni: string | null;
   status: string;
+  student_details?: DniRow | DniRow[] | null;
 }
 
 interface EnrollmentRow {
@@ -125,7 +129,7 @@ function parseDetails(
 }
 
 const ENROLLMENT_SELECT =
-  'student_id, created_at, profiles!inner(id, first_name, last_name, dni, status), courses!inner(id, year, division, shift, school_id)';
+  'student_id, created_at, profiles!inner(id, first_name, last_name, status, student_details(dni)), courses!inner(id, year, division, shift, school_id)';
 
 @Injectable()
 export class StudentsService {
@@ -145,13 +149,6 @@ export class StudentsService {
       .eq('courses.school_id', membership.institutionId);
     if (query?.courseId) {
       builder = builder.eq('course_id', query.courseId);
-    }
-    const q = query?.q?.trim();
-    if (q) {
-      builder = builder.or(
-        `first_name.ilike.%${q}%,last_name.ilike.%${q}%,dni.ilike.%${q}%`,
-        { referencedTable: 'profiles' },
-      );
     }
 
     const { data, error } = await builder;
@@ -176,7 +173,16 @@ export class StudentsService {
         this.toStudent(profile, firstRow(row.courses) ?? null),
       );
     }
-    return [...byStudent.values()].sort(
+    // Filtered here: the DNI lives in a nested table the query cannot OR with.
+    const q = query?.q?.trim().toLowerCase();
+    const found = [...byStudent.values()].filter(
+      (student) =>
+        !q ||
+        [student.firstName, student.lastName, student.dni].some((value) =>
+          value?.toLowerCase().includes(q),
+        ),
+    );
+    return found.sort(
       (a, b) =>
         `${a.lastName ?? ''}${a.firstName ?? ''}`.localeCompare(
           `${b.lastName ?? ''}${b.firstName ?? ''}`,
@@ -264,15 +270,11 @@ export class StudentsService {
             full_name: `${firstName} ${lastName}`,
             first_name: firstName,
             last_name: lastName,
-            dni,
             role: 'student',
             status: 'active',
           })
-          .select('id, first_name, last_name, dni, status')
+          .select('id, first_name, last_name, status')
           .single();
-      if (isUniqueViolation(profileError)) {
-        throw new ConflictException('Ya existe un alumno con ese DNI');
-      }
       if (profileError || !profile) {
         throw new InternalServerErrorException();
       }
@@ -295,11 +297,12 @@ export class StudentsService {
         throw new InternalServerErrorException();
       }
 
-      if (Object.keys(details).length > 0) {
-        await this.saveDetails(userId, details);
-      }
+      await this.saveDetails(membership, userId, { ...details, dni });
 
-      return this.toStudent(profile as ProfileRow, course);
+      return this.toStudent(
+        { ...(profile as ProfileRow), student_details: { dni } },
+        course,
+      );
     } catch (error) {
       await this.supabase.admin.auth.admin.deleteUser(userId).catch(() => {});
       throw error;
@@ -339,7 +342,7 @@ export class StudentsService {
         throw new BadRequestException('El DNI no puede estar vacío');
       }
       await this.assertDniAvailable(membership, dto.dni.trim(), studentId);
-      profileUpdate.dni = dto.dni.trim();
+      details.dni = dto.dni.trim();
     }
     if (dto?.status !== undefined) {
       if (
@@ -368,9 +371,6 @@ export class StudentsService {
         .from('profiles')
         .update(profileUpdate)
         .eq('id', studentId);
-      if (isUniqueViolation(error)) {
-        throw new ConflictException('Ya existe un alumno con ese DNI');
-      }
       if (error) {
         throw new InternalServerErrorException();
       }
@@ -384,7 +384,7 @@ export class StudentsService {
       throw new BadRequestException('No hay cambios para guardar');
     }
 
-    await this.saveDetails(studentId, details);
+    await this.saveDetails(membership, studentId, details);
 
     return this.loadStudent(membership, studentId).then((row) =>
       this.toStudent(row, row.courses),
@@ -393,14 +393,19 @@ export class StudentsService {
 
   // Also records when the student file changed, even if only the name did.
   private async saveDetails(
+    membership: ActiveMembership,
     studentId: string,
     details: Record<string, string | null>,
   ): Promise<void> {
     const { error } = await this.supabase.admin.from('student_details').upsert({
       student_id: studentId,
+      school_id: membership.institutionId,
       updated_at: new Date().toISOString(),
       ...details,
     });
+    if (isUniqueViolation(error)) {
+      throw new ConflictException('Ya existe un alumno con ese DNI');
+    }
     if (error) {
       throw new InternalServerErrorException();
     }
@@ -414,7 +419,7 @@ export class StudentsService {
       id: profile.id,
       firstName: profile.first_name,
       lastName: profile.last_name,
-      dni: profile.dni,
+      dni: firstRow(profile.student_details)?.dni ?? null,
       status: profile.status === 'inactive' ? 'inactive' : 'active',
       course: course
         ? {
@@ -482,16 +487,16 @@ export class StudentsService {
   private async assertDniAvailable(
     membership: ActiveMembership,
     dni: string,
-    excludeProfileId?: string,
+    excludeStudentId?: string,
   ): Promise<void> {
     let builder = this.supabase.admin
-      .from('profiles')
-      .select('id')
+      .from('student_details')
+      .select('student_id')
       .eq('school_id', membership.institutionId)
       .eq('dni', dni)
       .limit(1);
-    if (excludeProfileId) {
-      builder = builder.neq('id', excludeProfileId);
+    if (excludeStudentId) {
+      builder = builder.neq('student_id', excludeStudentId);
     }
     const { data, error } = await builder;
     if (error) {

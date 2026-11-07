@@ -38,8 +38,8 @@ const profileRow = (over: Record<string, unknown> = {}) => ({
   id: STUDENT_ID,
   first_name: 'Ana',
   last_name: 'Pérez',
-  dni: '12345678',
   status: 'active',
+  student_details: { dni: '12345678' },
   ...over,
 });
 
@@ -194,6 +194,56 @@ describe('StudentsService', () => {
       ]);
     });
 
+    it.each([
+      ['the DNI', '1234', 'Ana'],
+      ['the last name', 'GÓMEZ', 'Luz'],
+    ])('searches by %s', async (_, q, found) => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [
+        {
+          data: [
+            enrollmentRow(),
+            enrollmentRow({
+              student_id: 'other',
+              profiles: profileRow({
+                id: 'other',
+                first_name: 'Luz',
+                last_name: 'Gómez',
+                student_details: { dni: '55555555' },
+              }),
+            }),
+          ],
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/students').query({ q }),
+      ).expect(200);
+
+      expect(response.body.map((s: { firstName: string }) => s.firstName)).toEqual([
+        found,
+      ]);
+    });
+
+    it('lists a student without personal data with a null DNI', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [
+        {
+          data: [enrollmentRow({ profiles: profileRow({ student_details: null }) })],
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/students'),
+      ).expect(200);
+
+      expect(response.body[0].dni).toBeNull();
+    });
+
     it('filters by courseId', async () => {
       authAs('admin-1');
       memberAs('admin');
@@ -317,7 +367,6 @@ describe('StudentsService', () => {
       memberAs('admin');
       queues.courses = [{ data: courseRow(), error: null }];
       queues.profiles = [
-        { data: [], error: null }, // dni check
         { data: profileRow({ id: NEW_USER_ID }), error: null },
       ];
       queues.enrollments = [{ data: null, error: null }];
@@ -334,12 +383,18 @@ describe('StudentsService', () => {
         'profiles',
         'memberships',
         'enrollments',
+        'student_details',
       ]);
       expect(writes[0].rows).toMatchObject({
         id: NEW_USER_ID,
         school_id: 'school-1',
-        dni: '12345678',
         status: 'active',
+      });
+      expect(writes[0].rows).not.toHaveProperty('dni');
+      expect(writes[3].rows).toMatchObject({
+        student_id: NEW_USER_ID,
+        school_id: 'school-1',
+        dni: '12345678',
       });
       expect(writes[1].rows).toMatchObject({
         user_id: NEW_USER_ID,
@@ -361,7 +416,6 @@ describe('StudentsService', () => {
       memberAs('admin');
       queues.courses = [{ data: courseRow(), error: null }];
       queues.profiles = [
-        { data: [], error: null },
         { data: profileRow({ id: NEW_USER_ID }), error: null },
       ];
       queues.enrollments = [{ data: null, error: null }];
@@ -400,7 +454,7 @@ describe('StudentsService', () => {
       authAs('admin-1');
       memberAs('admin');
       queues.courses = [{ data: courseRow(), error: null }];
-      queues.profiles = [{ data: [{ id: 'other-student' }], error: null }];
+      queues.student_details = [{ data: [{ student_id: 'other' }], error: null }];
 
       await authed(
         request(app.getHttpServer()).post('/students').send(payload),
@@ -408,6 +462,25 @@ describe('StudentsService', () => {
 
       expect(createUser).not.toHaveBeenCalled();
       expect(writes).toHaveLength(0);
+    });
+
+    it('returns 409 and removes the user when two requests race for a DNI', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.courses = [{ data: courseRow(), error: null }];
+      queues.profiles = [{ data: profileRow({ id: NEW_USER_ID }), error: null }];
+      queues.enrollments = [{ data: null, error: null }];
+      queues.memberships.push({ data: null, error: null });
+      queues.student_details = [
+        { data: [], error: null },
+        { data: null, error: { code: '23505' } },
+      ];
+
+      await authed(
+        request(app.getHttpServer()).post('/students').send(payload),
+      ).expect(409);
+
+      expect(deleteUser).toHaveBeenCalledWith(NEW_USER_ID);
     });
 
     it('returns 404 when the course belongs to another institution', async () => {
@@ -427,7 +500,6 @@ describe('StudentsService', () => {
       memberAs('admin');
       queues.courses = [{ data: courseRow(), error: null }];
       queues.profiles = [
-        { data: [], error: null },
         { data: null, error: { message: 'db exploded' } },
       ];
 
@@ -562,6 +634,7 @@ describe('StudentsService', () => {
 
       const details = writes.find((w) => w.table === 'student_details');
       expect(Object.keys(details?.rows as object).sort()).toEqual([
+        'school_id',
         'student_id',
         'updated_at',
       ]);
@@ -580,11 +653,32 @@ describe('StudentsService', () => {
       expect(writes).toHaveLength(0);
     });
 
+    it('saves a new DNI in student_details, never in profiles', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.enrollments = [
+        { data: enrollmentRow(), error: null },
+        { data: enrollmentRow(), error: null },
+      ];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/students/${STUDENT_ID}`)
+          .send({ dni: ' 99999999 ' }),
+      ).expect(200);
+
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toMatchObject({
+        table: 'student_details',
+        rows: { student_id: STUDENT_ID, dni: '99999999' },
+      });
+    });
+
     it('returns 409 when the new DNI is already used by another student', async () => {
       authAs('admin-1');
       memberAs('admin');
       queues.enrollments = [{ data: enrollmentRow(), error: null }];
-      queues.profiles = [{ data: [{ id: 'other-student' }], error: null }];
+      queues.student_details = [{ data: [{ student_id: 'other' }], error: null }];
 
       await authed(
         request(app.getHttpServer())
