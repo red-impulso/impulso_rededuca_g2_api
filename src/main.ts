@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { AppModule } from './app.module.js';
+import { AppModule, ObserveInstrument } from './app.module.js';
 import { configureApp } from './app.setup.js';
 
 try {
@@ -10,7 +10,9 @@ try {
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    instrument: ObserveInstrument,
+  });
   // Render puts a proxy in front; trust it so rate limiting sees real IPs.
   app.set('trust proxy', 1);
   configureApp(app);

@@ -18,9 +18,17 @@ import { StudentsModule } from './modules/students/students.module.js';
 import { TeachersModule } from './modules/teachers/teachers.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { SupabaseModule } from './supabase/supabase.module.js';
+import { createObserveModule } from '@nestjs/observe';
+
+export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
 @Module({
   imports: [
+    ObserveModule.forRoot({
+      appKey: process.env.OBSERVE_APP_KEY,
+      appSecret: process.env.OBSERVE_APP_SECRET,
+      serviceId: 'impulsorededucag2api',
+    }),
     EventEmitterModule.forRoot(),
     SupabaseModule,
     HealthModule,
