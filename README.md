@@ -84,6 +84,46 @@ Una membresía inactiva no puede usar la API (`403`) y no aparece en `GET /me`. 
 
 Los datos personales del personal y los tutores (DNI, teléfono, formación) van en `member_details`, por institución y sin políticas RLS: solo los lee la API.
 
+### Alumnos
+
+Solo roles `admin` y `director`.
+
+- `GET /students?courseId&q` → `[{ id, firstName, lastName, dni, status, course: { id, year, division, shift } | null }]`, ordenados por apellido y nombre. `courseId` filtra por curso y `q` busca en nombre, apellido y DNI.
+- `GET /students/:id` → la ficha: lo anterior más `{ birthDate, address, phone, email, updatedAt }`. El DNI y los datos personales viven en `student_details` (sin RLS, solo los lee la API).
+- `POST /students` → `{ firstName, lastName, dni, email, courseId, password?, birthDate?, address?, phone? }`. Crea el usuario de auth (sin `password` genera una aleatoria) y lo inscribe en el curso. DNI repetido en la institución o email en uso → `409`.
+- `PATCH /students/:id` → `{ firstName?, lastName?, dni?, courseId?, status?, birthDate?, address?, phone? }` (al menos un campo). `status: 'inactive'` da de baja al alumno: el perfil no se borra, conserva su historial y sale de las planillas de notas y asistencia. Un campo de datos personales en `null` lo borra.
+
+### Notas
+
+- `GET /grading-periods` → `[{ id, name, startDate, endDate }]`: los períodos de la institución.
+- `GET /grades?subjectId&periodId` (rol `teacher`, solo sus materias) → `[{ student: { id, firstName, lastName }, value }]`: la planilla del curso de la materia, ordenada por apellido. Sin ambos parámetros → `400`.
+- `PUT /grades` (rol `teacher`) → `{ subjectId, periodId, entries: [{ studentId, value }] }` → `{ saved }`. Las notas van de 1 a 10 con hasta dos decimales; `value: null` borra la nota. El lote se valida entero antes de escribir: un `studentId` que no pertenece al curso → `400` y no se guarda nada.
+- `GET /students/:id/grades` → `[{ subject: { id, name }, period: { id, name }, value }]` ordenado por materia y período. `admin` y `director` lo ven siempre; `guardian` solo de sus hijos vinculados; `teacher` solo si tiene una materia en el curso del alumno. Otro caso → `403`.
+
+### Asistencia
+
+- `GET /attendance?courseId&date` (roles `teacher`, `admin`, `director`) → `[{ student: { id, firstName, lastName }, status }]` con `status` `null` si no se tomó lista. La fecha no puede ser futura ni inválida → `400`. Un `teacher` solo accede a cursos donde tiene una materia.
+- `PUT /attendance` (mismos roles) → `{ courseId, date, entries: [{ studentId, status }] }` → `{ saved }`. `status` es `present` | `absent` | `late` | `justified`.
+- `GET /students/:id/attendance` → `{ records: [{ date, status }], summary: { present, absent, late, justified, percentage } }`. `percentage` es `(present + late) / (present + late + absent)` — `justified` no cuenta — y `null` si no hay días computables. Mismas reglas de visibilidad que las notas.
+
+### Comunicados
+
+- `POST /announcements` (roles `admin`, `director`, `teacher`) → `{ scope: 'institution' | 'course' | 'student', courseId?, studentId?, title, body }`. `course` exige `courseId`, `student` exige `studentId` y `institution` no admite ninguno → `400` si no coincide. Un `teacher` solo puede publicar con `scope: 'course'` en cursos donde tiene materia → `403` si no.
+- `GET /announcements` → `[{ id, scope, courseId, studentId, title, body, createdAt, authorName, courseLabel }]`, más nuevos primero. `admin` y `director` ven todos; los demás roles ven los de institución más los de sus cursos (docentes) o hijos (tutores).
+
+### Notificaciones
+
+Se generan solas cuando se cargan notas, se toma asistencia o se publica un comunicado (`type`: `grade` | `attendance` | `announcement`), y les llegan a los tutores y docentes a quienes corresponde. Requieren membresía pero no un rol particular.
+
+- `GET /notifications` → las últimas 50: `[{ id, type, title, body, readAt, createdAt }]`.
+- `GET /notifications/unread-count` → `{ count }`.
+- `POST /notifications/:id/read` → la notificación marcada como leída. De otro usuario → `404`.
+- `POST /notifications/read-all` → `{ read }`: cantidad marcada.
+
+### Tablero
+
+- `GET /dashboard` (roles `admin`, `director`) → `{ students, courses, teachers, attendanceAverage, lowAttendance, gradeAverages }`. `attendanceAverage` es el porcentaje de asistencia de la institución (`null` sin registros); `lowAttendance` lista `[{ student, course, percentage }]` con los alumnos por debajo del 85 %, de menor a mayor; `gradeAverages` lista `[{ subject, course, average }]` con el promedio por materia (`null` sin notas cargadas).
+
 ## Postulaciones de la landing
 
 `POST /leads` es público (sin token) y recibe el formulario de la landing del grupo 2:
@@ -167,10 +207,15 @@ Además, cada push a `main` aplica las migraciones pendientes a la base de datos
 src/
   main.ts                  # bootstrap de NestJS (carga .env si existe)
   app.module.ts            # módulo raíz (guard global + EventEmitterModule)
-  auth/                    # AuthGuard global (Supabase Auth) + decorador @Public()
+  auth/                    # AuthGuard global (Supabase Auth), MembershipGuard,
+                           #   @Public(), @Roles() y @CurrentMembership()
   supabase/                # cliente admin de Supabase (service_role)
-  me/                      # GET /me: perfil y membresías del usuario
+  me/                      # GET /me y los endpoints propios de cada rol
   health/                  # módulo de health check (GET /health)
+  modules/                 # un módulo por dominio (controller + service + dto):
+                           #   institution, students, teachers, guardians, users,
+                           #   grades, attendance, announcements, notifications,
+                           #   dashboard y leads
 supabase/
   config.toml              # config del proyecto Supabase local
   migrations/              # migraciones SQL de la base
