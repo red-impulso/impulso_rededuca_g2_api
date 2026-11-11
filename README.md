@@ -110,12 +110,18 @@ Solo roles `admin` y `director`.
 
 - `POST /announcements` (roles `admin`, `director`, `teacher`) → `{ scope: 'institution' | 'course' | 'student', courseId?, studentId?, title, body }`. `course` exige `courseId`, `student` exige `studentId` y `institution` no admite ninguno → `400` si no coincide. Un `teacher` solo puede publicar con `scope: 'course'` en cursos donde tiene materia → `403` si no.
 - `GET /announcements` → `[{ id, scope, courseId, studentId, title, body, createdAt, authorName, courseLabel }]`, más nuevos primero. `admin` y `director` ven todos; los demás roles ven los de institución más los de sus cursos (docentes) o hijos (tutores).
+- `PATCH /announcements/:id` → `{ title?, body? }` (al menos un campo, ninguno vacío → `400`). Solo puede editarlo el autor del comunicado o un `admin`/`director` de la misma institución (con `X-Institution-Id` como siempre). Devuelve el comunicado actualizado. No genera una notificación nueva: si cambió el título, las notificaciones `announcement` ya entregadas se renombran a `Nuevo comunicado: {título}`.
+- `DELETE /announcements/:id` → `{ deleted: true }`. Mismos permisos que el `PATCH`. Borrado físico: también se borran las notificaciones `announcement` vinculadas (`notifications.announcement_id`), así las familias dejan de ver el comunicado erróneo en su bandeja.
+
+En ambos: sin sesión → `401`; sin `X-Institution-Id` → `400`; quien no es autor ni `admin`/`director` → `403`; comunicado inexistente o de otra institución → `404`.
 
 ### Notificaciones
 
 Se generan solas cuando se cargan notas, se toma asistencia o se publica un comunicado (`type`: `grade` | `attendance` | `announcement`), y les llegan a los tutores y docentes a quienes corresponde. Requieren membresía pero no un rol particular.
 
-- `GET /notifications` → las últimas 50: `[{ id, type, title, body, readAt, createdAt }]`.
+Las de tipo `announcement` quedan vinculadas al comunicado por `announcementId`: editar el título del comunicado las renombra y borrarlo las elimina (además de la FK `on delete cascade`).
+
+- `GET /notifications` → las últimas 50: `[{ id, type, title, body, readAt, createdAt, announcementId }]`.
 - `GET /notifications/unread-count` → `{ count }`.
 - `POST /notifications/:id/read` → la notificación marcada como leída. De otro usuario → `404`.
 - `POST /notifications/read-all` → `{ read }`: cantidad marcada.

@@ -13,6 +13,7 @@ import type {
   AnnouncementScope,
   CreateAnnouncementDto,
 } from './dto/create-announcement.dto.js';
+import type { UpdateAnnouncementDto } from './dto/update-announcement.dto.js';
 
 export const ANNOUNCEMENT_CREATED_EVENT = 'announcement.created';
 
@@ -20,6 +21,9 @@ const SCOPES: AnnouncementScope[] = ['institution', 'course', 'student'];
 const MANAGER_ROLES = ['admin', 'director'];
 const ANNOUNCEMENT_COLUMNS =
   'id, scope, course_id, student_id, title, body, created_at, profiles!announcements_created_by_fkey(full_name), courses(year, division)';
+const NOTIFICATION_TITLE_PREFIX = 'Nuevo comunicado: ';
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface AnnouncementCreatedPayload {
   schoolId: string;
@@ -172,6 +176,87 @@ export class AnnouncementsService {
     this.events.emit(ANNOUNCEMENT_CREATED_EVENT, payload);
 
     return toView(row);
+  }
+
+  // Only the author or a school manager (admin/director) can edit. Editing
+  // sends no new notification; when the title changes, the already-delivered
+  // "Nuevo comunicado: ..." notifications are retitled so the families don't
+  // keep reading the mistaken one.
+  async update(
+    user: AuthUser,
+    membership: ActiveMembership,
+    announcementId: string,
+    dto: UpdateAnnouncementDto,
+  ): Promise<AnnouncementView> {
+    const update: Record<string, string> = {};
+    if (dto?.title !== undefined) {
+      if (typeof dto.title !== 'string' || !dto.title.trim()) {
+        throw new BadRequestException('El título no puede estar vacío');
+      }
+      update.title = dto.title.trim();
+    }
+    if (dto?.body !== undefined) {
+      if (typeof dto.body !== 'string' || !dto.body.trim()) {
+        throw new BadRequestException('El texto no puede estar vacío');
+      }
+      update.body = dto.body.trim();
+    }
+    if (Object.keys(update).length === 0) {
+      throw new BadRequestException('No hay cambios para guardar');
+    }
+
+    await this.loadEditable(user, membership, announcementId);
+
+    const { data, error } = await this.supabase.admin
+      .from('announcements')
+      .update(update)
+      .eq('id', announcementId)
+      .select(ANNOUNCEMENT_COLUMNS)
+      .single();
+
+    if (error || !data) {
+      throw new InternalServerErrorException();
+    }
+
+    if (update.title) {
+      const { error: notificationsError } = await this.supabase.admin
+        .from('notifications')
+        .update({ title: `${NOTIFICATION_TITLE_PREFIX}${update.title}` })
+        .eq('announcement_id', announcementId);
+      if (notificationsError) {
+        throw new InternalServerErrorException();
+      }
+    }
+
+    return toView(data as AnnouncementRow);
+  }
+
+  // Same permissions as update. The announcement's notifications are removed
+  // first so families stop seeing the mistaken post; the FK on
+  // notifications.announcement_id also cascade-deletes as a backstop.
+  async remove(
+    user: AuthUser,
+    membership: ActiveMembership,
+    announcementId: string,
+  ): Promise<{ deleted: true }> {
+    await this.loadEditable(user, membership, announcementId);
+
+    const { error: notificationsError } = await this.supabase.admin
+      .from('notifications')
+      .delete()
+      .eq('announcement_id', announcementId);
+    if (notificationsError) {
+      throw new InternalServerErrorException();
+    }
+
+    const { error } = await this.supabase.admin
+      .from('announcements')
+      .delete()
+      .eq('id', announcementId);
+    if (error) {
+      throw new InternalServerErrorException();
+    }
+    return { deleted: true };
   }
 
   // The announcements that concern the caller: institution-wide plus the
@@ -343,5 +428,37 @@ export class AnnouncementsService {
       throw new NotFoundException('No se encontró el alumno');
     }
     return studentId;
+  }
+
+  // Editing and deleting are allowed to the announcement's author and to
+  // school managers. An announcement from another school is reported as
+  // missing so its existence isn't leaked.
+  private async loadEditable(
+    user: AuthUser,
+    membership: ActiveMembership,
+    announcementId: string,
+  ): Promise<void> {
+    if (!UUID_RE.test(announcementId)) {
+      throw new NotFoundException('No se encontró el comunicado');
+    }
+    const { data, error } = await this.supabase.admin
+      .from('announcements')
+      .select('id, created_by')
+      .eq('id', announcementId)
+      .eq('school_id', membership.institutionId)
+      .maybeSingle();
+
+    if (error) {
+      throw new InternalServerErrorException();
+    }
+    if (!data) {
+      throw new NotFoundException('No se encontró el comunicado');
+    }
+    if (
+      (data as { created_by: string | null }).created_by !== user.id &&
+      !MANAGER_ROLES.includes(membership.role)
+    ) {
+      throw new ForbiddenException('No tenés permiso para hacer esto');
+    }
   }
 }

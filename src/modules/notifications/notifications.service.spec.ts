@@ -295,11 +295,13 @@ describe('NotificationsService', () => {
             user_id: 'guardian-1',
             type: 'announcement',
             title: 'Nuevo comunicado: Reunión general',
+            announcement_id: 'ann-1',
           },
           {
             user_id: 'guardian-2',
             type: 'announcement',
             title: 'Nuevo comunicado: Reunión general',
+            announcement_id: 'ann-1',
           },
         ],
       });
@@ -384,6 +386,7 @@ describe('NotificationsService', () => {
           body: null,
           readAt: null,
           createdAt: '2026-11-05T10:00:00Z',
+          announcementId: null,
         },
       ]);
     });

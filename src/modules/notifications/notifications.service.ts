@@ -20,6 +20,7 @@ export interface NotificationView {
   body: string | null;
   readAt: string | null;
   createdAt: string;
+  announcementId: string | null;
 }
 
 interface NotificationRow {
@@ -29,6 +30,7 @@ interface NotificationRow {
   body: string | null;
   read_at: string | null;
   created_at: string;
+  announcement_id: string | null;
 }
 
 interface NewNotification {
@@ -36,6 +38,7 @@ interface NewNotification {
   user_id: string;
   type: NotificationType;
   title: string;
+  announcement_id?: string | null;
 }
 
 const INBOX_LIMIT = 50;
@@ -54,6 +57,7 @@ function toView(row: NotificationRow): NotificationView {
     body: row.body,
     readAt: row.read_at,
     createdAt: row.created_at,
+    announcementId: row.announcement_id ?? null,
   };
 }
 
@@ -67,7 +71,7 @@ export class NotificationsService {
   ): Promise<NotificationView[]> {
     const { data, error } = await this.supabase.admin
       .from('notifications')
-      .select('id, type, title, body, read_at, created_at')
+      .select('id, type, title, body, read_at, created_at, announcement_id')
       .eq('user_id', user.id)
       .eq('school_id', membership.institutionId)
       .order('created_at', { ascending: false })
@@ -103,7 +107,7 @@ export class NotificationsService {
   ): Promise<NotificationView> {
     const { data, error } = await this.supabase.admin
       .from('notifications')
-      .select('id, type, title, body, read_at, created_at')
+      .select('id, type, title, body, read_at, created_at, announcement_id')
       .eq('id', notificationId)
       .eq('user_id', user.id)
       .eq('school_id', membership.institutionId)
@@ -125,7 +129,7 @@ export class NotificationsService {
       .from('notifications')
       .update({ read_at: new Date().toISOString() })
       .eq('id', notificationId)
-      .select('id, type, title, body, read_at, created_at')
+      .select('id, type, title, body, read_at, created_at, announcement_id')
       .single();
 
     if (updateError || !updated) {
@@ -273,6 +277,7 @@ export class NotificationsService {
         user_id: userId,
         type: 'announcement',
         title: `Nuevo comunicado: ${payload.title}`,
+        announcement_id: payload.announcementId,
       })),
     );
   }

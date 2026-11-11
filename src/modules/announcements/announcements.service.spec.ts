@@ -18,7 +18,7 @@ interface QueryResult {
 
 interface WriteCall {
   table: string;
-  method: 'upsert' | 'insert';
+  method: 'upsert' | 'insert' | 'update' | 'delete';
   rows: unknown;
 }
 
@@ -44,6 +44,8 @@ describe('AnnouncementsService', () => {
       single: vi.fn(),
       upsert: vi.fn(),
       insert: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
       // oxlint-disable-next-line no-thenable -- supabase builders are thenable
       then: (onFulfilled: (value: QueryResult) => unknown) => {
         const result = queues[table]?.shift() ?? { data: null, error: null };
@@ -70,12 +72,16 @@ describe('AnnouncementsService', () => {
       single = true;
       return chain;
     });
-    for (const method of ['upsert', 'insert'] as const) {
+    for (const method of ['upsert', 'insert', 'update'] as const) {
       chain[method].mockImplementation((rows: unknown) => {
         writes.push({ table, method, rows });
         return chain;
       });
     }
+    chain.delete.mockImplementation(() => {
+      writes.push({ table, method: 'delete', rows: undefined });
+      return chain;
+    });
     return chain;
   }
 
@@ -571,6 +577,258 @@ describe('AnnouncementsService', () => {
 
     it('returns 401 without a token', () => {
       return request(app.getHttpServer()).get('/announcements').expect(401);
+    });
+  });
+
+  describe('PATCH /announcements/:id', () => {
+    const ANN_ID = '11111111-2222-3333-4444-555555555555';
+    const ownedRow = (createdBy: string | null) => ({
+      data: { id: ANN_ID, created_by: createdBy },
+      error: null,
+    });
+
+    it('lets the author edit the title and retitles delivered notifications', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      queues.announcements = [
+        ownedRow('teacher-1'),
+        {
+          data: announcementRow({ id: ANN_ID, title: 'Título corregido' }),
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .patch(`/announcements/${ANN_ID}`)
+          .send({ title: 'Título corregido' }),
+      ).expect(200);
+
+      expect(response.body).toMatchObject({
+        id: ANN_ID,
+        title: 'Título corregido',
+      });
+      expect(writes).toContainEqual(
+        expect.objectContaining({
+          table: 'announcements',
+          method: 'update',
+          rows: { title: 'Título corregido' },
+        }),
+      );
+      expect(writes).toContainEqual(
+        expect.objectContaining({
+          table: 'notifications',
+          method: 'update',
+          rows: { title: 'Nuevo comunicado: Título corregido' },
+        }),
+      );
+    });
+
+    it('lets a manager edit an announcement they did not write', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.announcements = [
+        ownedRow('teacher-9'),
+        {
+          data: announcementRow({ id: ANN_ID, body: 'Texto corregido' }),
+          error: null,
+        },
+      ];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/announcements/${ANN_ID}`)
+          .send({ body: 'Texto corregido' }),
+      ).expect(200);
+
+      // Body-only edits leave the delivered notifications untouched.
+      expect(writes.some((w) => w.table === 'notifications')).toBe(false);
+    });
+
+    it.each(['director'])('lets a %s edit too', async (role) => {
+      authAs(`${role}-1`);
+      memberAs(role);
+      queues.announcements = [
+        ownedRow('teacher-9'),
+        { data: announcementRow({ id: ANN_ID }), error: null },
+      ];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/announcements/${ANN_ID}`)
+          .send({ body: 'Texto corregido' }),
+      ).expect(200);
+    });
+
+    it('returns 403 for a non-author teacher', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      queues.announcements = [ownedRow('teacher-9')];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .patch(`/announcements/${ANN_ID}`)
+          .send({ title: 'X' }),
+      ).expect(403);
+
+      expect(response.body.message).toBe('No tenés permiso para hacer esto');
+      expect(writes).toHaveLength(0);
+    });
+
+    it('returns 403 for a guardian', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+      queues.announcements = [ownedRow('teacher-9')];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/announcements/${ANN_ID}`)
+          .send({ title: 'X' }),
+      ).expect(403);
+    });
+
+    it('returns 404 for an announcement of another institution', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.announcements = [{ data: null, error: null }];
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/announcements/${ANN_ID}`)
+          .send({ title: 'X' }),
+      ).expect(404);
+    });
+
+    it('returns 404 for a malformed id', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      await authed(
+        request(app.getHttpServer())
+          .patch('/announcements/not-a-uuid')
+          .send({ title: 'X' }),
+      ).expect(404);
+    });
+
+    it('returns 400 when there is nothing to change', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      const response = await authed(
+        request(app.getHttpServer()).patch(`/announcements/${ANN_ID}`).send({}),
+      ).expect(400);
+
+      expect(response.body.message).toBe('No hay cambios para guardar');
+    });
+
+    it('returns 400 for a blank title', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      await authed(
+        request(app.getHttpServer())
+          .patch(`/announcements/${ANN_ID}`)
+          .send({ title: '   ' }),
+      ).expect(400);
+    });
+
+    it('returns 401 without a token', () => {
+      return request(app.getHttpServer())
+        .patch(`/announcements/${ANN_ID}`)
+        .send({ title: 'X' })
+        .expect(401);
+    });
+  });
+
+  describe('DELETE /announcements/:id', () => {
+    const ANN_ID = '11111111-2222-3333-4444-555555555555';
+    const ownedRow = (createdBy: string | null) => ({
+      data: { id: ANN_ID, created_by: createdBy },
+      error: null,
+    });
+
+    it('lets the author delete it and removes its notifications', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      queues.announcements = [ownedRow('teacher-1')];
+
+      const response = await authed(
+        request(app.getHttpServer()).delete(`/announcements/${ANN_ID}`),
+      ).expect(200);
+
+      expect(response.body).toEqual({ deleted: true });
+      expect(writes).toContainEqual(
+        expect.objectContaining({
+          table: 'notifications',
+          method: 'delete',
+        }),
+      );
+      expect(writes).toContainEqual(
+        expect.objectContaining({
+          table: 'announcements',
+          method: 'delete',
+        }),
+      );
+    });
+
+    it.each(['admin', 'director'])(
+      'lets a %s delete an announcement they did not write',
+      async (role) => {
+        authAs(`${role}-1`);
+        memberAs(role);
+        queues.announcements = [ownedRow('teacher-9')];
+
+        await authed(
+          request(app.getHttpServer()).delete(`/announcements/${ANN_ID}`),
+        ).expect(200);
+      },
+    );
+
+    it('returns 403 for a non-author teacher', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      queues.announcements = [ownedRow('teacher-9')];
+
+      await authed(
+        request(app.getHttpServer()).delete(`/announcements/${ANN_ID}`),
+      ).expect(403);
+
+      expect(writes).toHaveLength(0);
+    });
+
+    it('returns 403 for a non-author guardian', async () => {
+      authAs('guardian-1');
+      memberAs('guardian');
+      queues.announcements = [ownedRow('teacher-9')];
+
+      await authed(
+        request(app.getHttpServer()).delete(`/announcements/${ANN_ID}`),
+      ).expect(403);
+    });
+
+    it('returns 404 for an announcement of another institution', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      queues.announcements = [{ data: null, error: null }];
+
+      await authed(
+        request(app.getHttpServer()).delete(`/announcements/${ANN_ID}`),
+      ).expect(404);
+    });
+
+    it('returns 404 for a malformed id', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+
+      await authed(
+        request(app.getHttpServer()).delete('/announcements/not-a-uuid'),
+      ).expect(404);
+    });
+
+    it('returns 401 without a token', () => {
+      return request(app.getHttpServer())
+        .delete(`/announcements/${ANN_ID}`)
+        .expect(401);
     });
   });
 });
