@@ -42,6 +42,7 @@ describe('GradesService', () => {
       maybeSingle: vi.fn(),
       upsert: vi.fn(),
       insert: vi.fn(),
+      delete: vi.fn(),
       // oxlint-disable-next-line no-thenable -- supabase builders are thenable
       then: (onFulfilled: (value: QueryResult) => unknown) =>
         Promise.resolve(
@@ -57,7 +58,7 @@ describe('GradesService', () => {
     ] as const) {
       chain[method].mockReturnValue(chain);
     }
-    for (const method of ['upsert', 'insert'] as const) {
+    for (const method of ['upsert', 'insert', 'delete'] as const) {
       chain[method].mockImplementation((rows: unknown) => {
         writes.push({ table, method, rows });
         return chain;
@@ -496,7 +497,7 @@ describe('GradesService', () => {
       },
     );
 
-    it('value null does not save or delete anything', async () => {
+    it('value null without a saved grade writes nothing', async () => {
       authAs('teacher-1');
       memberAs('teacher');
       teacherSubject();
@@ -512,6 +513,30 @@ describe('GradesService', () => {
 
       expect(response.body).toEqual({ saved: 0 });
       expect(writes).toHaveLength(0);
+    });
+
+    it('value null deletes the saved grade', async () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      teacherSubject();
+      periodExists();
+      enrolled('stu-1');
+      queues.grades = [
+        // loadGrades encuentra la nota guardada; el delete la borra.
+        { data: [{ id: 'g-1', student_id: 'stu-1', value: 8 }], error: null },
+        { data: null, error: null },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(sheet([{ studentId: 'stu-1', value: null }])),
+      ).expect(200);
+
+      expect(response.body).toEqual({ saved: 1 });
+      expect(writes).toEqual([
+        { table: 'grades', method: 'delete', rows: undefined },
+      ]);
     });
 
     it('returns 400 for a student of another course and saves nothing', async () => {

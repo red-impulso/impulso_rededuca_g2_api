@@ -225,10 +225,31 @@ export class GradesService {
     }
 
     const existing = await this.loadGrades(dto.subjectId, dto.periodId);
+    // null sobre una nota guardada la borra; un número distinto la actualiza.
+    const borradas = [...entries].filter(
+      ([studentId, value]) => value === null && existing.has(studentId),
+    );
     const changed = [...entries].filter(
       ([studentId, value]) =>
         value !== null && Number(existing.get(studentId)?.value) !== value,
     );
+
+    if (borradas.length > 0) {
+      // Borra la nota. La auditoría de grade_changes se pierde con el
+      // cascade: borrar es para corregir una carga equivocada, no para
+      // borrar el historial de notas reales.
+      const { error: deleteError } = await this.supabase.admin
+        .from('grades')
+        .delete()
+        .in(
+          'id',
+          borradas.map(([studentId]) => existing.get(studentId)!.id),
+        );
+
+      if (deleteError) {
+        throw new InternalServerErrorException();
+      }
+    }
 
     if (changed.length > 0) {
       const { data: upserted, error: upsertError } = await this.supabase.admin
@@ -277,19 +298,22 @@ export class GradesService {
       if (changesError) {
         throw new InternalServerErrorException();
       }
+    }
 
+    const guardados = changed.length + borradas.length;
+    if (guardados > 0) {
       const payload: GradesSavedPayload = {
         schoolId: membership.institutionId,
         subjectId: dto.subjectId,
         periodId: dto.periodId,
-        saved: changed.length,
+        saved: guardados,
         updatedBy: user.id,
-        students: changed.map(([studentId]) => studentId),
+        students: [...changed, ...borradas].map(([studentId]) => studentId),
       };
       this.events.emit(GRADES_SAVED_EVENT, payload);
     }
 
-    return { saved: changed.length };
+    return { saved: guardados };
   }
 
   // Every grade of a student, scoped to the member's school. Allowed for the
