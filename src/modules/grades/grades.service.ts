@@ -9,7 +9,11 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AuthUser } from '../../auth/auth.guard.js';
 import type { Membership as ActiveMembership } from '../../auth/membership.guard.js';
 import { SupabaseService } from '../../supabase/supabase.service.js';
-import type { SaveGradesDto } from './dto/save-grades.dto.js';
+import {
+  GRADE_ITEM_KINDS,
+  type GradeItemKind,
+  type SaveGradesDto,
+} from './dto/save-grades.dto.js';
 
 export const GRADES_SAVED_EVENT = 'grades.saved';
 
@@ -29,9 +33,13 @@ export interface PeriodSummary {
   endDate: string;
 }
 
+export type GradeItems = Record<GradeItemKind, number | null>;
+
 export interface GradeSheetRow {
   student: { id: string; firstName: string | null; lastName: string | null };
+  // Nota del período: el promedio de las instancias (o la cargada antes).
   value: number | null;
+  items: GradeItems;
 }
 
 export interface StudentGradeRow {
@@ -74,11 +82,51 @@ interface GradeRow {
   value: number;
 }
 
+interface GradeItemRow {
+  id: string;
+  student_id: string;
+  kind: GradeItemKind;
+  value: number;
+}
+
+type ItemsByStudent = Map<
+  string,
+  Map<GradeItemKind, { id: string; value: number }>
+>;
+
+const ITEMS_ERROR =
+  'Las instancias son TP 1, TP 2, Parcial 1, Parcial 2 y Final';
+const VALUE_ERROR =
+  'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales';
+
+function emptyItems(): GradeItems {
+  return { tp1: null, tp2: null, parcial1: null, parcial2: null, final: null };
+}
+
+function isGradeItemKind(kind: string): kind is GradeItemKind {
+  return (GRADE_ITEM_KINDS as readonly string[]).includes(kind);
+}
+
+// Promedio simple de las instancias cargadas, con 2 decimales (numeric(4,2)).
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const total = values.reduce((sum, value) => sum + Number(value), 0);
+  return Math.round((total / values.length) * 100) / 100;
+}
+
 interface StudentGradeQueryRow {
   value: number;
   subjects:
     { id: string; name: string } | { id: string; name: string }[] | null;
   periods: { id: string; name: string } | { id: string; name: string }[] | null;
+}
+
+function itemsOf(items: ItemsByStudent, studentId: string): GradeItems {
+  const result = emptyItems();
+  for (const [kind, item] of items.get(studentId) ?? []) {
+    result[kind] = item.value;
+  }
+  return result;
 }
 
 function firstRow<T>(value: T | T[] | null | undefined): T | undefined {
@@ -151,6 +199,7 @@ export class GradesService {
     }
 
     const grades = await this.loadGrades(subjectId, periodId);
+    const items = await this.loadItems(subjectId, periodId);
 
     return ((enrollments ?? []) as EnrollmentRow[])
       .flatMap((row) => {
@@ -165,6 +214,7 @@ export class GradesService {
                   lastName: profile.last_name,
                 },
                 value: grades.get(row.student_id)?.value ?? null,
+                items: itemsOf(items, row.student_id),
               },
             ]
           : [];
@@ -206,6 +256,10 @@ export class GradesService {
     // single bad entry rejects the request without persisting anything.
     const enrolledIds = await this.loadEnrolledStudentIds(subject.course_id);
     const entries = new Map<string, number | null>();
+    const itemEntries = new Map<
+      string,
+      Partial<Record<GradeItemKind, number | null>>
+    >();
     for (const entry of dto.entries) {
       if (
         !entry ||
@@ -216,12 +270,95 @@ export class GradesService {
           'Cada nota tiene que ser de un alumno del curso',
         );
       }
+      if (entry.items !== undefined) {
+        if (
+          !entry.items ||
+          typeof entry.items !== 'object' ||
+          Array.isArray(entry.items)
+        ) {
+          throw new BadRequestException(ITEMS_ERROR);
+        }
+        for (const [kind, value] of Object.entries(entry.items)) {
+          if (!isGradeItemKind(kind)) {
+            throw new BadRequestException(ITEMS_ERROR);
+          }
+          if (value !== null && !isGradeValue(value)) {
+            throw new BadRequestException(VALUE_ERROR);
+          }
+        }
+        itemEntries.set(entry.studentId, entry.items);
+        continue;
+      }
       if (entry.value !== null && !isGradeValue(entry.value)) {
-        throw new BadRequestException(
-          'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales',
-        );
+        throw new BadRequestException(VALUE_ERROR);
       }
       entries.set(entry.studentId, entry.value);
+    }
+
+    // Instancias: se escriben primero; la nota del período de cada alumno
+    // que cambió pasa a ser el promedio de sus instancias.
+    const itemStudents = new Set<string>();
+    if (itemEntries.size > 0) {
+      const existingItems = await this.loadItems(dto.subjectId, dto.periodId);
+      const upserts: { studentId: string; kind: GradeItemKind; value: number }[] =
+        [];
+      const deletes: string[] = [];
+
+      for (const [studentId, changes] of itemEntries) {
+        const current = existingItems.get(studentId) ?? new Map();
+        const next = new Map<GradeItemKind, number>(
+          [...current].map(([kind, item]) => [kind, Number(item.value)]),
+        );
+        let changed = false;
+        for (const [kind, value] of Object.entries(changes) as [
+          GradeItemKind,
+          number | null,
+        ][]) {
+          const saved = current.get(kind);
+          if (value === null) {
+            if (saved) {
+              deletes.push(saved.id);
+              next.delete(kind);
+              changed = true;
+            }
+          } else if (!saved || Number(saved.value) !== value) {
+            upserts.push({ studentId, kind, value });
+            next.set(kind, value);
+            changed = true;
+          }
+        }
+        if (changed) {
+          itemStudents.add(studentId);
+          entries.set(studentId, average([...next.values()]));
+        }
+      }
+
+      if (deletes.length > 0) {
+        const { error } = await this.supabase.admin
+          .from('grade_items')
+          .delete()
+          .in('id', deletes);
+        if (error) {
+          throw new InternalServerErrorException();
+        }
+      }
+      if (upserts.length > 0) {
+        const { error } = await this.supabase.admin.from('grade_items').upsert(
+          upserts.map(({ studentId, kind, value }) => ({
+            student_id: studentId,
+            subject_id: dto.subjectId,
+            period_id: dto.periodId,
+            kind,
+            value,
+            updated_by: user.id,
+            updated_at: new Date().toISOString(),
+          })),
+          { onConflict: 'student_id,subject_id,period_id,kind' },
+        );
+        if (error) {
+          throw new InternalServerErrorException();
+        }
+      }
     }
 
     const existing = await this.loadGrades(dto.subjectId, dto.periodId);
@@ -300,7 +437,11 @@ export class GradesService {
       }
     }
 
-    const guardados = changed.length + borradas.length;
+    const students = new Set([
+      ...itemStudents,
+      ...[...changed, ...borradas].map(([studentId]) => studentId),
+    ]);
+    const guardados = students.size;
     if (guardados > 0) {
       const payload: GradesSavedPayload = {
         schoolId: membership.institutionId,
@@ -308,7 +449,7 @@ export class GradesService {
         periodId: dto.periodId,
         saved: guardados,
         updatedBy: user.id,
-        students: [...changed, ...borradas].map(([studentId]) => studentId),
+        students: [...students],
       };
       this.events.emit(GRADES_SAVED_EVENT, payload);
     }
@@ -482,6 +623,28 @@ export class GradesService {
         )
         .map((row: { student_id: string }) => row.student_id),
     );
+  }
+
+  private async loadItems(
+    subjectId: string,
+    periodId: string,
+  ): Promise<ItemsByStudent> {
+    const { data, error } = await this.supabase.admin
+      .from('grade_items')
+      .select('id, student_id, kind, value')
+      .eq('subject_id', subjectId)
+      .eq('period_id', periodId);
+
+    if (error) {
+      throw new InternalServerErrorException();
+    }
+    const byStudent: ItemsByStudent = new Map();
+    for (const row of (data ?? []) as GradeItemRow[]) {
+      const items = byStudent.get(row.student_id) ?? new Map();
+      items.set(row.kind, { id: row.id, value: Number(row.value) });
+      byStudent.set(row.student_id, items);
+    }
+    return byStudent;
   }
 
   private async loadGrades(
