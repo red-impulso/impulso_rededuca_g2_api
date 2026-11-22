@@ -767,7 +767,11 @@ describe('GradesService', () => {
           value: 8,
           updated_by: 'teacher-1',
         }),
-        expect.objectContaining({ student_id: 'stu-1', kind: 'parcial1', value: 7 }),
+        expect.objectContaining({
+          student_id: 'stu-1',
+          kind: 'parcial1',
+          value: 7,
+        }),
       ]);
       // (6 + 8 + 7) / 3 = 7
       expect(writes[1].rows).toEqual([
@@ -804,7 +808,9 @@ describe('GradesService', () => {
       ).expect(200);
 
       // 23 / 3 = 7,666... -> 7,67
-      expect(writes[1].rows).toEqual([expect.objectContaining({ value: 7.67 })]);
+      expect(writes[1].rows).toEqual([
+        expect.objectContaining({ value: 7.67 }),
+      ]);
     });
 
     it('null borra la instancia y recalcula el promedio', async () => {
@@ -889,9 +895,18 @@ describe('GradesService', () => {
     });
 
     it.each([
-      [{ tp3: 7 }, 'Las instancias son TP 1, TP 2, Parcial 1, Parcial 2 y Final'],
-      [{ tp1: 11 }, 'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales'],
-      [{ tp1: '7' }, 'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales'],
+      [
+        { tp3: 7 },
+        'Las instancias son TP 1, TP 2, Parcial 1, Parcial 2 y Final',
+      ],
+      [
+        { tp1: 11 },
+        'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales',
+      ],
+      [
+        { tp1: '7' },
+        'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales',
+      ],
     ])('rechaza %j con 400 y no guarda nada', async (items, mensaje) => {
       preparar();
 
@@ -941,18 +956,72 @@ describe('GradesService', () => {
       ];
     };
 
+    const sinInstancias = {
+      tp1: null,
+      tp2: null,
+      parcial1: null,
+      parcial2: null,
+      final: null,
+    };
+
     const expectedGrades = [
       {
         subject: { id: 'subject-2', name: 'Lengua' },
         period: { id: 'period-1', name: '1.er trimestre' },
         value: 7,
+        items: sinInstancias,
       },
       {
         subject: { id: 'subject-1', name: 'Matemática' },
         period: { id: 'period-1', name: '1.er trimestre' },
         value: 8.5,
+        items: sinInstancias,
       },
     ];
+
+    it('includes the instances of each subject and period (for the report card)', async () => {
+      authAs('admin-1');
+      memberAs('admin');
+      studentInSchool();
+      studentGrades();
+      queues.grade_items = [
+        {
+          data: [
+            {
+              subject_id: 'subject-1',
+              period_id: 'period-1',
+              kind: 'tp1',
+              value: 9,
+            },
+            {
+              subject_id: 'subject-1',
+              period_id: 'period-1',
+              kind: 'parcial1',
+              value: '8.00',
+            },
+            {
+              subject_id: 'subject-2',
+              period_id: 'period-2',
+              kind: 'tp1',
+              value: 4,
+            },
+          ],
+          error: null,
+        },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer()).get('/students/stu-1/grades'),
+      ).expect(200);
+
+      expect(response.body).toEqual([
+        expectedGrades[0],
+        {
+          ...expectedGrades[1],
+          items: { ...sinInstancias, tp1: 9, parcial1: 8 },
+        },
+      ]);
+    });
 
     it('returns every grade of the student to a linked guardian', async () => {
       authAs('guardian-1');
