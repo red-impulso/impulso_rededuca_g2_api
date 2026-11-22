@@ -6,6 +6,7 @@ import { AppService } from './app.service.js';
 import { AuthGuard } from './auth/auth.guard.js';
 import { HealthModule } from './health/health.module.js';
 import { MeModule } from './me/me.module.js';
+import { AlertsModule } from './modules/alerts/alerts.module.js';
 import { AnnouncementsModule } from './modules/announcements/announcements.module.js';
 import { AttendanceModule } from './modules/attendance/attendance.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
@@ -38,6 +39,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AnnouncementsModule,
     NotificationsModule,
     DashboardModule,
+    AlertsModule,
     InstitutionModule,
     LeadsModule,
     GuardiansModule,
