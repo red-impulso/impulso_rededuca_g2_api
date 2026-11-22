@@ -117,7 +117,7 @@ En ambos: sin sesión → `401`; sin `X-Institution-Id` → `400`; quien no es a
 
 ### Notificaciones
 
-Se generan solas cuando se cargan notas, se toma asistencia o se publica un comunicado (`type`: `grade` | `attendance` | `announcement`), y les llegan a los tutores y docentes a quienes corresponde. Requieren membresía pero no un rol particular.
+Se generan solas cuando se cargan notas, se toma asistencia o se publica un comunicado (`type`: `grade` | `attendance` | `announcement` | `risk`, este último de las alertas tempranas), y les llegan a los tutores y docentes a quienes corresponde. Requieren membresía pero no un rol particular.
 
 Las de tipo `announcement` quedan vinculadas al comunicado por `announcementId`: editar el título del comunicado las renombra y borrarlo las elimina (además de la FK `on delete cascade`).
 
@@ -129,6 +129,7 @@ Las de tipo `announcement` quedan vinculadas al comunicado por `announcementId`:
 ### Tablero
 
 - `GET /dashboard` (roles `admin`, `director`) → `{ students, courses, teachers, attendanceAverage, lowAttendance, gradeAverages }`. `attendanceAverage` es el porcentaje de asistencia de la institución (`null` sin registros); `lowAttendance` lista `[{ student, course, percentage }]` con los alumnos por debajo del 85 %, de menor a mayor; `gradeAverages` lista `[{ subject, course, average }]` con el promedio por materia (`null` sin notas cargadas).
+- `GET /alerts` (roles `admin`, `director`, `teacher`) → `[{ student, course: { id, year, division }, reasons }]`: **alertas tempranas**, los alumnos activos en riesgo. `reasons` trae `{ type: 'attendance', percentage }` si la asistencia es menor al 75 % (con al menos 3 días cargados) y `{ type: 'grade', subject, average }` por cada materia con promedio menor a 6. Primero los que tienen más motivos. Un `teacher` ve solo los cursos donde tiene materias. Al guardar asistencia o notas, la API avisa (notificación `type: 'risk'`) a los tutores del alumno y a los `admin`/`director` la primera vez que queda en riesgo; la tabla `risk_alerts` recuerda a quién ya se avisó.
 
 ## Postulaciones de la landing
 

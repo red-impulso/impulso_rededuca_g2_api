@@ -11,7 +11,12 @@ import type { AnnouncementCreatedPayload } from '../announcements/announcements.
 import type { AttendanceSavedPayload } from '../attendance/attendance.service.js';
 import type { GradesSavedPayload } from '../grades/grades.service.js';
 
-export type NotificationType = 'grade' | 'attendance' | 'announcement';
+export type NotificationType =
+  | 'grade'
+  | 'attendance'
+  | 'announcement'
+  // Alertas tempranas (modules/alerts).
+  | 'risk';
 
 export interface NotificationView {
   id: string;
