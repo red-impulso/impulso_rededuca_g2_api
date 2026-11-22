@@ -96,8 +96,8 @@ Solo roles `admin` y `director`.
 ### Notas
 
 - `GET /grading-periods` → `[{ id, name, startDate, endDate }]`: los períodos de la institución.
-- `GET /grades?subjectId&periodId` (rol `teacher`, solo sus materias) → `[{ student: { id, firstName, lastName }, value }]`: la planilla del curso de la materia, ordenada por apellido. Sin ambos parámetros → `400`.
-- `PUT /grades` (rol `teacher`) → `{ subjectId, periodId, entries: [{ studentId, value }] }` → `{ saved }`. Las notas van de 1 a 10 con hasta dos decimales; `value: null` borra la nota. El lote se valida entero antes de escribir: un `studentId` que no pertenece al curso → `400` y no se guarda nada.
+- `GET /grades?subjectId&periodId` (rol `teacher`, solo sus materias) → `[{ student: { id, firstName, lastName }, value, items: { tp1, tp2, parcial1, parcial2, final } }]`: la planilla del curso de la materia, ordenada por apellido. `items` trae cada instancia (o `null`) y `value` es la nota del período. Sin ambos parámetros → `400`.
+- `PUT /grades` (rol `teacher`) → `{ subjectId, periodId, entries: [{ studentId, items: { tp1?, tp2?, parcial1?, parcial2?, final? } }] }` → `{ saved }` (alumnos con cambios). Cada entrada manda solo las instancias que cambian; `null` borra una. La nota del período (`grades.value`) pasa a ser el **promedio simple** de las instancias cargadas, con dos decimales; si se borran todas, se borra la nota. Sigue aceptando el formato anterior `{ studentId, value }` (`value: null` borra la nota). Las notas van de 1 a 10 con hasta dos decimales; una instancia que no es `tp1`, `tp2`, `parcial1`, `parcial2` o `final` → `400`. El lote se valida entero antes de escribir: un `studentId` que no pertenece al curso → `400` y no se guarda nada.
 - `GET /students/:id/grades` → `[{ subject: { id, name }, period: { id, name }, value }]` ordenado por materia y período. `admin` y `director` lo ven siempre; `guardian` solo de sus hijos vinculados; `teacher` solo si tiene una materia en el curso del alumno. Otro caso → `403`.
 
 ### Asistencia

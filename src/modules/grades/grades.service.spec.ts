@@ -18,7 +18,7 @@ interface QueryResult {
 
 interface WriteCall {
   table: string;
-  method: 'upsert' | 'insert';
+  method: 'upsert' | 'insert' | 'delete';
   rows: unknown;
 }
 
@@ -222,6 +222,15 @@ describe('GradesService', () => {
       queues.grades = [
         { data: [{ id: 'g-1', student_id: 'stu-1', value: 8.5 }], error: null },
       ];
+      queues.grade_items = [
+        {
+          data: [
+            { id: 'i-1', student_id: 'stu-1', kind: 'tp1', value: 8 },
+            { id: 'i-2', student_id: 'stu-1', kind: 'parcial1', value: 9 },
+          ],
+          error: null,
+        },
+      ];
 
       const response = await authed(
         request(app.getHttpServer()).get(
@@ -233,10 +242,24 @@ describe('GradesService', () => {
         {
           student: { id: 'stu-2', firstName: 'Bruno', lastName: 'Díaz' },
           value: null,
+          items: {
+            tp1: null,
+            tp2: null,
+            parcial1: null,
+            parcial2: null,
+            final: null,
+          },
         },
         {
           student: { id: 'stu-1', firstName: 'Ana', lastName: 'García' },
           value: 8.5,
+          items: {
+            tp1: 8,
+            tp2: null,
+            parcial1: 9,
+            parcial2: null,
+            final: null,
+          },
         },
       ]);
     });
@@ -283,6 +306,13 @@ describe('GradesService', () => {
         {
           student: { id: 'stu-1', firstName: 'Ana', lastName: 'García' },
           value: null,
+          items: {
+            tp1: null,
+            tp2: null,
+            parcial1: null,
+            parcial2: null,
+            final: null,
+          },
         },
       ]);
     });
@@ -680,6 +710,199 @@ describe('GradesService', () => {
           .put('/grades')
           .send({ subjectId: 'subject-1' }),
       ).expect(400);
+    });
+  });
+
+  describe('PUT /grades con instancias (TP 1, TP 2, Parcial 1, Parcial 2, Final)', () => {
+    const conItems = (studentId: string, items: Record<string, unknown>) => ({
+      subjectId: 'subject-1',
+      periodId: 'period-1',
+      entries: [{ studentId, items }],
+    });
+
+    const preparar = () => {
+      authAs('teacher-1');
+      memberAs('teacher');
+      teacherSubject();
+      periodExists();
+      enrolled('stu-1');
+    };
+
+    const escrituras = () => writes.map((w) => `${w.table}:${w.method}`);
+
+    it('guarda las instancias y la nota del período pasa a ser su promedio', async () => {
+      preparar();
+      queues.grade_items = [
+        {
+          data: [{ id: 'i-1', student_id: 'stu-1', kind: 'tp1', value: 6 }],
+          error: null,
+        },
+        { data: null, error: null },
+      ];
+      queues.grades = [
+        { data: [], error: null },
+        { data: [{ id: 'g-1', student_id: 'stu-1' }], error: null },
+      ];
+      queues.grade_changes = [{ data: null, error: null }];
+      const emit = vi.spyOn(events, 'emit');
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(conItems('stu-1', { tp2: 8, parcial1: 7 })),
+      ).expect(200);
+
+      expect(response.body).toEqual({ saved: 1 });
+      expect(escrituras()).toEqual([
+        'grade_items:upsert',
+        'grades:upsert',
+        'grade_changes:insert',
+      ]);
+      expect(writes[0].rows).toEqual([
+        expect.objectContaining({
+          student_id: 'stu-1',
+          subject_id: 'subject-1',
+          period_id: 'period-1',
+          kind: 'tp2',
+          value: 8,
+          updated_by: 'teacher-1',
+        }),
+        expect.objectContaining({ student_id: 'stu-1', kind: 'parcial1', value: 7 }),
+      ]);
+      // (6 + 8 + 7) / 3 = 7
+      expect(writes[1].rows).toEqual([
+        expect.objectContaining({ student_id: 'stu-1', value: 7 }),
+      ]);
+      expect(writes[2].rows).toEqual([
+        expect.objectContaining({
+          grade_id: 'g-1',
+          previous_value: null,
+          new_value: 7,
+        }),
+      ]);
+      expect(emit).toHaveBeenCalledWith(
+        GRADES_SAVED_EVENT,
+        expect.objectContaining({ saved: 1, students: ['stu-1'] }),
+      );
+    });
+
+    it('el promedio se redondea a 2 decimales', async () => {
+      preparar();
+      queues.grade_items = [
+        { data: [], error: null },
+        { data: null, error: null },
+      ];
+      queues.grades = [
+        { data: [], error: null },
+        { data: [{ id: 'g-1', student_id: 'stu-1' }], error: null },
+      ];
+
+      await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(conItems('stu-1', { tp1: 7, tp2: 8, final: 8 })),
+      ).expect(200);
+
+      // 23 / 3 = 7,666... -> 7,67
+      expect(writes[1].rows).toEqual([expect.objectContaining({ value: 7.67 })]);
+    });
+
+    it('null borra la instancia y recalcula el promedio', async () => {
+      preparar();
+      queues.grade_items = [
+        {
+          data: [
+            { id: 'i-1', student_id: 'stu-1', kind: 'tp1', value: 6 },
+            { id: 'i-2', student_id: 'stu-1', kind: 'tp2', value: 8 },
+          ],
+          error: null,
+        },
+        { data: null, error: null },
+      ];
+      queues.grades = [
+        { data: [{ id: 'g-1', student_id: 'stu-1', value: 7 }], error: null },
+        { data: [{ id: 'g-1', student_id: 'stu-1' }], error: null },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(conItems('stu-1', { tp2: null })),
+      ).expect(200);
+
+      expect(response.body).toEqual({ saved: 1 });
+      expect(escrituras()).toEqual([
+        'grade_items:delete',
+        'grades:upsert',
+        'grade_changes:insert',
+      ]);
+      expect(writes[1].rows).toEqual([expect.objectContaining({ value: 6 })]);
+      expect(writes[2].rows).toEqual([
+        expect.objectContaining({ previous_value: 7, new_value: 6 }),
+      ]);
+    });
+
+    it('si se borran todas las instancias se borra la nota del período', async () => {
+      preparar();
+      queues.grade_items = [
+        {
+          data: [{ id: 'i-1', student_id: 'stu-1', kind: 'tp1', value: 6 }],
+          error: null,
+        },
+        { data: null, error: null },
+      ];
+      queues.grades = [
+        { data: [{ id: 'g-1', student_id: 'stu-1', value: 6 }], error: null },
+        { data: null, error: null },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(conItems('stu-1', { tp1: null })),
+      ).expect(200);
+
+      expect(response.body).toEqual({ saved: 1 });
+      expect(escrituras()).toEqual(['grade_items:delete', 'grades:delete']);
+    });
+
+    it('mandar las mismas instancias no escribe nada', async () => {
+      preparar();
+      queues.grade_items = [
+        {
+          data: [{ id: 'i-1', student_id: 'stu-1', kind: 'tp1', value: 6 }],
+          error: null,
+        },
+      ];
+      queues.grades = [
+        { data: [{ id: 'g-1', student_id: 'stu-1', value: 6 }], error: null },
+      ];
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(conItems('stu-1', { tp1: 6, tp2: null })),
+      ).expect(200);
+
+      expect(response.body).toEqual({ saved: 0 });
+      expect(writes).toHaveLength(0);
+    });
+
+    it.each([
+      [{ tp3: 7 }, 'Las instancias son TP 1, TP 2, Parcial 1, Parcial 2 y Final'],
+      [{ tp1: 11 }, 'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales'],
+      [{ tp1: '7' }, 'Las notas deben ser un número entre 1 y 10, con hasta 2 decimales'],
+    ])('rechaza %j con 400 y no guarda nada', async (items, mensaje) => {
+      preparar();
+
+      const response = await authed(
+        request(app.getHttpServer())
+          .put('/grades')
+          .send(conItems('stu-1', items)),
+      ).expect(400);
+
+      expect(response.body.message).toBe(mensaje);
+      expect(writes).toHaveLength(0);
     });
   });
 
