@@ -46,6 +46,8 @@ export interface StudentGradeRow {
   subject: { id: string; name: string };
   period: { id: string; name: string };
   value: number;
+  // TP 1, TP 2, Parcial 1, Parcial 2 y Final de ese período (para el boletín).
+  items: GradeItems;
 }
 
 interface SubjectRow {
@@ -189,9 +191,7 @@ export class GradesService {
     const { data: enrollments, error: enrollmentsError } =
       await this.supabase.admin
         .from('enrollments')
-        .select(
-          'student_id, profiles!inner(id, first_name, last_name, status)',
-        )
+        .select('student_id, profiles!inner(id, first_name, last_name, status)')
         .eq('course_id', subject.course_id);
 
     if (enrollmentsError) {
@@ -300,8 +300,11 @@ export class GradesService {
     const itemStudents = new Set<string>();
     if (itemEntries.size > 0) {
       const existingItems = await this.loadItems(dto.subjectId, dto.periodId);
-      const upserts: { studentId: string; kind: GradeItemKind; value: number }[] =
-        [];
+      const upserts: {
+        studentId: string;
+        kind: GradeItemKind;
+        value: number;
+      }[] = [];
       const deletes: string[] = [];
 
       for (const [studentId, changes] of itemEntries) {
@@ -502,6 +505,31 @@ export class GradesService {
       throw new InternalServerErrorException();
     }
 
+    const { data: itemRows, error: itemsError } = await this.supabase.admin
+      .from('grade_items')
+      .select(
+        'subject_id, period_id, kind, value, subjects!inner(courses!inner(school_id))',
+      )
+      .eq('student_id', studentId)
+      .eq('subjects.courses.school_id', membership.institutionId);
+
+    if (itemsError) {
+      throw new InternalServerErrorException();
+    }
+    const itemsBySubjectPeriod = new Map<string, GradeItems>();
+    for (const row of (itemRows ?? []) as {
+      subject_id: string;
+      period_id: string;
+      kind: string;
+      value: number | string;
+    }[]) {
+      if (!isGradeItemKind(row.kind)) continue;
+      const key = `${row.subject_id}|${row.period_id}`;
+      const items = itemsBySubjectPeriod.get(key) ?? emptyItems();
+      items[row.kind] = Number(row.value);
+      itemsBySubjectPeriod.set(key, items);
+    }
+
     return ((data ?? []) as StudentGradeQueryRow[])
       .flatMap((row) => {
         const subject = firstRow(row.subjects);
@@ -512,6 +540,9 @@ export class GradesService {
                 subject: { id: subject.id, name: subject.name },
                 period: { id: period.id, name: period.name },
                 value: row.value,
+                items:
+                  itemsBySubjectPeriod.get(`${subject.id}|${period.id}`) ??
+                  emptyItems(),
               },
             ]
           : [];
@@ -618,8 +649,10 @@ export class GradesService {
     return new Set(
       (data ?? [])
         .filter(
-          (row: { student_id: string; profiles: { status: string } | { status: string }[] | null }) =>
-            firstRow(row.profiles)?.status !== 'inactive',
+          (row: {
+            student_id: string;
+            profiles: { status: string } | { status: string }[] | null;
+          }) => firstRow(row.profiles)?.status !== 'inactive',
         )
         .map((row: { student_id: string }) => row.student_id),
     );
